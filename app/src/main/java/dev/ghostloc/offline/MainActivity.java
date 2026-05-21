@@ -36,6 +36,12 @@ import org.json.JSONObject;
 import io.github.libxposed.service.XposedService;
 
 public final class MainActivity extends Activity implements ModuleApplication.ServiceStateListener {
+    public static final String EXTRA_AUTO_APPLY = "dev.ghostloc.offline.extra.AUTO_APPLY";
+    public static final String EXTRA_ACTIVE = "dev.ghostloc.offline.extra.ACTIVE";
+    public static final String EXTRA_LAT = "dev.ghostloc.offline.extra.LAT";
+    public static final String EXTRA_LON = "dev.ghostloc.offline.extra.LON";
+    public static final String EXTRA_FINISH = "dev.ghostloc.offline.extra.FINISH";
+
     private XposedService service;
     private MapView mapView;
     private Marker marker;
@@ -52,6 +58,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     private CheckBox cellShield;
     private CheckBox mockShield;
     private CheckBox movementMode;
+    private boolean pendingAutoApply;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,6 +67,10 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         setContentView(buildUi());
         requestRuntimePermissions();
         loadSettings();
+        pendingAutoApply = getIntent() != null && getIntent().getBooleanExtra(EXTRA_AUTO_APPLY, false);
+        if (pendingAutoApply) {
+            applyIntentSettings(false);
+        }
         updateMarker();
     }
 
@@ -98,6 +109,9 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
             serviceStatus.setText(service == null ? "Module service: not connected" :
                     "Module service: " + service.getFrameworkName() + " API " + service.getApiVersion());
             loadSettings();
+            if (pendingAutoApply && service != null) {
+                applyIntentSettings(true);
+            }
         });
     }
 
@@ -298,10 +312,43 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                     .apply();
             runningStatus.setText(active ? "Status: spoofing active" : "Status: idle");
             updateMarker();
+            android.util.Log.i("GhostLocApp", "Saved settings active=" + active
+                    + " lat=" + lat + " lon=" + lon + " speed=" + speed);
             Toast.makeText(this, active ? "Started" : "Saved", Toast.LENGTH_SHORT).show();
         } catch (Throwable throwable) {
             Toast.makeText(this, "Invalid configuration", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void applyIntentSettings(boolean remoteReady) {
+        if (getIntent() == null) {
+            return;
+        }
+        double lat = readDoubleExtra(EXTRA_LAT, SettingsStore.DEFAULT_LAT);
+        double lon = readDoubleExtra(EXTRA_LON, SettingsStore.DEFAULT_LON);
+        boolean active = getIntent().getBooleanExtra(EXTRA_ACTIVE, true);
+        setCoordinate(lat, lon);
+        saveSettings(active);
+        if (remoteReady) {
+            pendingAutoApply = false;
+            if (getIntent().getBooleanExtra(EXTRA_FINISH, false)) {
+                finish();
+            }
+        }
+    }
+
+    private double readDoubleExtra(String key, double fallback) {
+        Object value = getIntent().getExtras() == null ? null : getIntent().getExtras().get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Double.parseDouble(text);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return fallback;
     }
 
     private void searchPlace() {

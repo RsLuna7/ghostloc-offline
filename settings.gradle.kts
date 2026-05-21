@@ -20,4 +20,4 @@ rootProject.name = "ghostloc-offline"
 
 include(":vector-api-stubs")
 include(":app")
-
+include(":probe-app")
