@@ -7,8 +7,11 @@ import android.location.Geocoder;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.SupplicantState;
 import android.provider.Settings;
 import android.telephony.ServiceState;
 import android.telephony.TelephonyManager;
@@ -16,6 +19,7 @@ import android.util.Log;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +35,7 @@ import io.github.libxposed.api.XposedModuleInterface.SystemServerLoadedParam;
 public final class GhostLocModule extends XposedModule {
     private static final String TAG = "GhostLocModule";
     private static final String SELF_PACKAGE = "dev.ghostloc.offline";
+    private static final String BRIDGE_PROVIDER = "ghostloc";
     private static volatile XposedInterface bridge;
     private static volatile SharedPreferences prefs;
 
@@ -74,6 +79,14 @@ public final class GhostLocModule extends XposedModule {
                     bridge.hook(method, RequestUpdatesHooker.class);
                 } else if ("getCurrentLocation".equals(name)) {
                     bridge.hook(method, RequestUpdatesHooker.class);
+                } else if ("getProviders".equals(name) || "getAllProviders".equals(name)) {
+                    bridge.hook(method, ProvidersHooker.class);
+                } else if ("isProviderEnabled".equals(name)) {
+                    bridge.hook(method, ProviderEnabledHooker.class);
+                } else if ("getBestProvider".equals(name)) {
+                    bridge.hook(method, BestProviderHooker.class);
+                } else if ("sendExtraCommand".equals(name)) {
+                    bridge.hook(method, ExtraCommandHooker.class);
                 }
             }
         } catch (Throwable throwable) {
@@ -138,6 +151,16 @@ public final class GhostLocModule extends XposedModule {
                     bridge.hook(method, WifiRssiHooker.class);
                 } else if ("getLinkSpeed".equals(name)) {
                     bridge.hook(method, WifiLinkSpeedHooker.class);
+                } else if ("getFrequency".equals(name)) {
+                    bridge.hook(method, WifiFrequencyHooker.class);
+                } else if ("getNetworkId".equals(name)) {
+                    bridge.hook(method, WifiNetworkIdHooker.class);
+                } else if ("getIpAddress".equals(name)) {
+                    bridge.hook(method, WifiIpHooker.class);
+                } else if ("getSupplicantState".equals(name)) {
+                    bridge.hook(method, WifiSupplicantHooker.class);
+                } else if ("getHiddenSSID".equals(name)) {
+                    bridge.hook(method, FalseHooker.class);
                 }
             }
         } catch (Throwable throwable) {
@@ -161,6 +184,15 @@ public final class GhostLocModule extends XposedModule {
                     bridge.hook(method, ServiceStateHooker.class);
                 } else if ("getPhoneType".equals(name)) {
                     bridge.hook(method, PhoneTypeHooker.class);
+                } else if ("getNetworkOperator".equals(name)
+                        || "getSimOperator".equals(name)) {
+                    bridge.hook(method, OperatorCodeHooker.class);
+                } else if ("getNetworkOperatorName".equals(name)
+                        || "getSimOperatorName".equals(name)) {
+                    bridge.hook(method, OperatorNameHooker.class);
+                } else if ("getNetworkCountryIso".equals(name)
+                        || "getSimCountryIso".equals(name)) {
+                    bridge.hook(method, CountryIsoHooker.class);
                 }
             }
         } catch (Throwable throwable) {
@@ -200,6 +232,9 @@ public final class GhostLocModule extends XposedModule {
             if (!active()) {
                 return;
             }
+            if (isCancellationSignalSet(callback.getArgs())) {
+                return;
+            }
             Location location = makeLocation(providerFrom(callback.getArgs()));
             Executor executor = null;
             for (Object arg : callback.getArgs()) {
@@ -236,10 +271,62 @@ public final class GhostLocModule extends XposedModule {
         }
     }
 
+    public static final class ProvidersHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (active()) {
+                callback.returnAndSkip(Arrays.asList(
+                        LocationManager.GPS_PROVIDER,
+                        LocationManager.NETWORK_PROVIDER,
+                        LocationManager.PASSIVE_PROVIDER,
+                        "fused"));
+            }
+        }
+    }
+
+    public static final class ProviderEnabledHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (active() && isKnownProviderArg(callback.getArgs())) {
+                callback.returnAndSkip(true);
+            }
+        }
+    }
+
+    public static final class BestProviderHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (active()) {
+                callback.returnAndSkip(LocationManager.GPS_PROVIDER);
+            }
+        }
+    }
+
+    public static final class ExtraCommandHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            Object[] args = callback.getArgs();
+            if (args == null || args.length < 2 || !BRIDGE_PROVIDER.equals(args[0])) {
+                return;
+            }
+            String command = String.valueOf(args[1]);
+            Bundle bundle = null;
+            for (Object arg : args) {
+                if (arg instanceof Bundle value) {
+                    bundle = value;
+                }
+            }
+            handleBridgeCommand(command, bundle);
+            callback.returnAndSkip(true);
+        }
+    }
+
     public static final class GeocoderHooker implements XposedInterface.Hooker {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (active() && mockShield()) {
-                callback.returnAndSkip(makeAddressList());
+                Object member = callback.getMember();
+                if (member instanceof Method method && method.getReturnType() == Void.TYPE) {
+                    dispatchGeocodeListener(callback.getArgs(), makeAddressList());
+                    callback.returnAndSkip(null);
+                } else {
+                    callback.returnAndSkip(makeAddressList());
+                }
             }
         }
     }
@@ -256,6 +343,30 @@ public final class GhostLocModule extends XposedModule {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (cellShield()) {
                 callback.returnAndSkip(TelephonyManager.PHONE_TYPE_GSM);
+            }
+        }
+    }
+
+    public static final class OperatorCodeHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (cellShield()) {
+                callback.returnAndSkip("00101");
+            }
+        }
+    }
+
+    public static final class OperatorNameHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (cellShield()) {
+                callback.returnAndSkip("GhostLoc");
+            }
+        }
+    }
+
+    public static final class CountryIsoHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (cellShield()) {
+                callback.returnAndSkip("us");
             }
         }
     }
@@ -308,6 +419,38 @@ public final class GhostLocModule extends XposedModule {
         }
     }
 
+    public static final class WifiFrequencyHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (wifiShield()) {
+                callback.returnAndSkip(2412);
+            }
+        }
+    }
+
+    public static final class WifiNetworkIdHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (wifiShield()) {
+                callback.returnAndSkip(0);
+            }
+        }
+    }
+
+    public static final class WifiIpHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (wifiShield()) {
+                callback.returnAndSkip(0);
+            }
+        }
+    }
+
+    public static final class WifiSupplicantHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (wifiShield()) {
+                callback.returnAndSkip(SupplicantState.COMPLETED);
+            }
+        }
+    }
+
     public static final class SecureStringHooker implements XposedInterface.Hooker {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (mockShield() && hasMockLocationKey(callback.getArgs())) {
@@ -356,6 +499,78 @@ public final class GhostLocModule extends XposedModule {
         return location;
     }
 
+    private static void handleBridgeCommand(String command, Bundle bundle) {
+        Bundle data = bundle == null ? Bundle.EMPTY : bundle;
+        SharedPreferences.Editor editor = writablePrefsEditor();
+        if (editor == null) {
+            if ("is_start".equals(command)) {
+                data.putBoolean("is_start", active());
+            }
+            log("bridge command observed=" + command);
+            return;
+        }
+        if ("start".equals(command)) {
+            putLocation(editor, data);
+            editor.putBoolean(SettingsStore.ACTIVE, true);
+            editor.putLong(SettingsStore.STARTED_AT, System.currentTimeMillis());
+        } else if ("stop".equals(command)) {
+            editor.putBoolean(SettingsStore.ACTIVE, false);
+            editor.putLong(SettingsStore.STARTED_AT, 0L);
+        } else if ("update_location".equals(command) || "move".equals(command)) {
+            putLocation(editor, data);
+        } else if ("put_config".equals(command)) {
+            putConfig(editor, data);
+        } else if ("set_speed".equals(command)) {
+            editor.putFloat(SettingsStore.SPEED, (float) data.getDouble("speed", SettingsStore.DEFAULT_SPEED));
+        } else if ("set_altitude".equals(command)) {
+            editor.putLong(SettingsStore.ALTITUDE,
+                    Double.doubleToRawLongBits(data.getDouble("altitude", SettingsStore.DEFAULT_ALTITUDE)));
+        } else if ("set_bearing".equals(command)) {
+            editor.putFloat(SettingsStore.BEARING, (float) data.getDouble("bearing", SettingsStore.DEFAULT_BEARING));
+        } else if ("is_start".equals(command)) {
+            data.putBoolean("is_start", active());
+        } else {
+            return;
+        }
+        editor.apply();
+        log("bridge command handled=" + command);
+    }
+
+    private static SharedPreferences.Editor writablePrefsEditor() {
+        try {
+            return prefs().edit();
+        } catch (UnsupportedOperationException unsupported) {
+            return null;
+        } catch (Throwable throwable) {
+            log("prefs editor unavailable", throwable);
+            return null;
+        }
+    }
+
+    private static void putLocation(SharedPreferences.Editor editor, Bundle data) {
+        editor.putLong(SettingsStore.LAT,
+                Double.doubleToRawLongBits(data.getDouble("lat", currentLat())));
+        editor.putLong(SettingsStore.LON,
+                Double.doubleToRawLongBits(data.getDouble("lon", currentLon())));
+        putConfig(editor, data);
+    }
+
+    private static void putConfig(SharedPreferences.Editor editor, Bundle data) {
+        if (data.containsKey("speed")) {
+            editor.putFloat(SettingsStore.SPEED, (float) data.getDouble("speed", SettingsStore.DEFAULT_SPEED));
+        }
+        if (data.containsKey("altitude")) {
+            editor.putLong(SettingsStore.ALTITUDE,
+                    Double.doubleToRawLongBits(data.getDouble("altitude", SettingsStore.DEFAULT_ALTITUDE)));
+        }
+        if (data.containsKey("accuracy")) {
+            editor.putFloat(SettingsStore.ACCURACY, (float) data.getDouble("accuracy", SettingsStore.DEFAULT_ACCURACY));
+        }
+        if (data.containsKey("bearing")) {
+            editor.putFloat(SettingsStore.BEARING, (float) data.getDouble("bearing", SettingsStore.DEFAULT_BEARING));
+        }
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void dispatchConsumer(Executor executor, Consumer consumer, Location location) {
         Runnable task = () -> {
@@ -386,6 +601,18 @@ public final class GhostLocModule extends XposedModule {
         ArrayList<Address> result = new ArrayList<>();
         result.add(address);
         return result;
+    }
+
+    private static void dispatchGeocodeListener(Object[] args, List<Address> addresses) {
+        if (args == null) {
+            return;
+        }
+        for (Object arg : args) {
+            if (arg == null) {
+                continue;
+            }
+            tryInvoke(arg, "onGeocode", new Class<?>[]{List.class}, new Object[]{addresses});
+        }
     }
 
     private static ServiceState makeServiceState() {
@@ -445,6 +672,34 @@ public final class GhostLocModule extends XposedModule {
         return LocationManager.GPS_PROVIDER;
     }
 
+    private static boolean isKnownProviderArg(Object[] args) {
+        if (args == null) {
+            return false;
+        }
+        for (Object arg : args) {
+            if (arg instanceof String value
+                    && (LocationManager.GPS_PROVIDER.equals(value)
+                    || LocationManager.NETWORK_PROVIDER.equals(value)
+                    || LocationManager.PASSIVE_PROVIDER.equals(value)
+                    || "fused".equals(value))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isCancellationSignalSet(Object[] args) {
+        if (args == null) {
+            return false;
+        }
+        for (Object arg : args) {
+            if (arg instanceof CancellationSignal signal && signal.isCanceled()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean hasMockLocationKey(Object[] args) {
         if (args == null) {
             return false;
@@ -459,6 +714,16 @@ public final class GhostLocModule extends XposedModule {
 
     private static boolean active() {
         return prefs().getBoolean(SettingsStore.ACTIVE, false);
+    }
+
+    private static double currentLat() {
+        return Double.longBitsToDouble(prefs().getLong(SettingsStore.LAT,
+                Double.doubleToRawLongBits(SettingsStore.DEFAULT_LAT)));
+    }
+
+    private static double currentLon() {
+        return Double.longBitsToDouble(prefs().getLong(SettingsStore.LON,
+                Double.doubleToRawLongBits(SettingsStore.DEFAULT_LON)));
     }
 
     private static boolean wifiShield() {

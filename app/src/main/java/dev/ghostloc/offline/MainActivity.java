@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.location.LocationManager;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -310,6 +311,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                     .putLong(SettingsStore.STARTED_AT, active ? System.currentTimeMillis() : 0L)
                     .putString(SettingsStore.LAST_STATUS, active ? "started" : "stopped")
                     .apply();
+            sendBridgeCommand(active ? "start" : "stop", lat, lon, speed, altitude, accuracy, bearing);
             runningStatus.setText(active ? "Status: spoofing active" : "Status: idle");
             updateMarker();
             android.util.Log.i("GhostLocApp", "Saved settings active=" + active
@@ -317,6 +319,31 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
             Toast.makeText(this, active ? "Started" : "Saved", Toast.LENGTH_SHORT).show();
         } catch (Throwable throwable) {
             Toast.makeText(this, "Invalid configuration", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void sendBridgeCommand(
+            String command,
+            double lat,
+            double lon,
+            float speed,
+            double altitude,
+            float accuracy,
+            float bearing
+    ) {
+        try {
+            Bundle bundle = new Bundle();
+            bundle.putDouble("lat", lat);
+            bundle.putDouble("lon", lon);
+            bundle.putDouble("speed", speed);
+            bundle.putDouble("altitude", altitude);
+            bundle.putDouble("accuracy", accuracy);
+            bundle.putDouble("bearing", bearing);
+            LocationManager manager = (LocationManager) getSystemService(LOCATION_SERVICE);
+            boolean handled = manager != null && manager.sendExtraCommand("ghostloc", command, bundle);
+            android.util.Log.i("GhostLocApp", "Bridge command=" + command + " handled=" + handled);
+        } catch (Throwable throwable) {
+            android.util.Log.i("GhostLocApp", "Bridge command failed=" + command + " " + throwable.getClass().getSimpleName());
         }
     }
 

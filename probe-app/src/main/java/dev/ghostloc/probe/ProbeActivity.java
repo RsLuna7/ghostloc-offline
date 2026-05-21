@@ -6,8 +6,11 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
+import android.location.Criteria;
+import android.location.Geocoder;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.CancellationSignal;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
@@ -16,6 +19,7 @@ import android.widget.TextView;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Executors;
 
 public final class ProbeActivity extends Activity {
     private static final String TAG = "GhostLocProbe";
@@ -49,6 +53,7 @@ public final class ProbeActivity extends Activity {
     private void runProbe() {
         StringBuilder report = new StringBuilder();
         probeLocation(report);
+        probeGeocoder(report);
         probeSettings(report);
         probeWifi(report);
         probeTelephony(report);
@@ -61,6 +66,10 @@ public final class ProbeActivity extends Activity {
         try {
             LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
             Location location = manager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            report.append("providers=").append(manager.getAllProviders())
+                    .append(" gps_enabled=").append(manager.isProviderEnabled(LocationManager.GPS_PROVIDER))
+                    .append(" best=").append(manager.getBestProvider(new Criteria(), true))
+                    .append("\n");
             if (location == null) {
                 report.append("location=null\n");
                 return;
@@ -74,8 +83,27 @@ public final class ProbeActivity extends Activity {
                     location.getAccuracy(),
                     isMock(location),
                     location.getProvider()));
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                manager.getCurrentLocation(LocationManager.GPS_PROVIDER, new CancellationSignal(),
+                        Executors.newSingleThreadExecutor(),
+                        current -> Log.i(TAG, String.format(Locale.US,
+                                "current_location=%.6f,%.6f mock=%s",
+                                current == null ? 0.0 : current.getLatitude(),
+                                current == null ? 0.0 : current.getLongitude(),
+                                current != null && isMock(current))));
+            }
         } catch (Throwable throwable) {
             report.append("location_error=").append(throwable.getClass().getSimpleName()).append("\n");
+        }
+    }
+
+    private void probeGeocoder(StringBuilder report) {
+        try {
+            Geocoder geocoder = new Geocoder(this, Locale.US);
+            List<?> addresses = geocoder.getFromLocation(1.0, 2.0, 1);
+            report.append("geocoder=").append(addresses == null ? -1 : addresses.size()).append("\n");
+        } catch (Throwable throwable) {
+            report.append("geocoder_error=").append(throwable.getClass().getSimpleName()).append("\n");
         }
     }
 
@@ -96,6 +124,11 @@ public final class ProbeActivity extends Activity {
             report.append("wifi_mac=").append(info == null ? "null" : info.getMacAddress())
                     .append(" bssid=").append(info == null ? "null" : info.getBSSID())
                     .append(" ssid=").append(info == null ? "null" : info.getSSID())
+                    .append(" rssi=").append(info == null ? 0 : info.getRssi())
+                    .append(" freq=").append(info == null ? 0 : info.getFrequency())
+                    .append(" link=").append(info == null ? 0 : info.getLinkSpeed())
+                    .append(" network_id=").append(info == null ? -99 : info.getNetworkId())
+                    .append(" supplicant=").append(info == null ? "null" : info.getSupplicantState())
                     .append(" scans=").append(scans == null ? -1 : scans.size())
                     .append("\n");
         } catch (Throwable throwable) {
@@ -107,6 +140,10 @@ public final class ProbeActivity extends Activity {
         try {
             TelephonyManager manager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
             report.append("network_type=").append(manager.getNetworkType())
+                    .append(" phone_type=").append(manager.getPhoneType())
+                    .append(" operator=").append(manager.getNetworkOperator())
+                    .append(" operator_name=").append(manager.getNetworkOperatorName())
+                    .append(" country=").append(manager.getNetworkCountryIso())
                     .append(" roaming=").append(manager.isNetworkRoaming())
                     .append(" cells=").append(manager.getAllCellInfo() == null ? -1 : manager.getAllCellInfo().size())
                     .append("\n");
