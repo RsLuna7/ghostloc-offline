@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">GhostLoc Offline</string>
+    <string name="module_description">Offline location control module for owned test devices.</string>
+</resources>
+
