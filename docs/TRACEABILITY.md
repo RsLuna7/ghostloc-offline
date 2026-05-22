@@ -362,6 +362,82 @@ Phase 3 notes:
 - the telephony profile is now internally consistent for the owned probe path,
   but broad third-party app compatibility is still a later acceptance task
 
+### Phase 4 - Add GNSS status and NMEA synthesis
+
+Purpose:
+
+- implement Phase 4 of `docs/REPLICATION_PLAN.md`
+- make the spoofed coordinate visible through GNSS callback paths instead of
+  only basic location APIs
+- generate stable NMEA output that matches the current spoof state
+
+Main files:
+
+```text
+app/src/main/java/dev/ghostloc/offline/GhostLocModule.java
+app/src/main/java/dev/ghostloc/offline/SettingsStore.java
+probe-app/src/main/java/dev/ghostloc/probe/ProbeActivity.java
+docs/DEVICE_TEST_REPORT.md
+docs/REPLICATION_PLAN.md
+```
+
+Implemented:
+
+- GNSS settings storage keys:
+  - `gnss_sat_count`
+  - `nmea_enabled`
+  - `agps_enabled`
+- synthetic satellite profile generation from the current spoof coordinate
+- reflected `GnssStatus` construction with populated satellite arrays:
+  - SVID/flags
+  - CN0
+  - elevation
+  - azimuth
+  - carrier frequency
+  - baseband CN0
+- public callback hook coverage for:
+  - `LocationManager.registerGnssStatusCallback(...)`
+  - `LocationManager.addGpsStatusListener(...)`
+  - `LocationManager.addNmeaListener(...)`
+  - `LocationManager.getGpsStatus(...)`
+- one-shot synthetic GNSS callback delivery:
+  - `onStarted`
+  - `onFirstFix`
+  - `onSatelliteStatusChanged`
+- deterministic NMEA generation for:
+  - `$GPGGA`
+  - `$GPRMC`
+  - `$GPGSA`
+  - `$GPGSV`
+- probe-app GNSS verification for:
+  - `GnssStatus.Callback`
+  - legacy `GpsStatus.Listener`
+  - `OnNmeaMessageListener`
+
+Real-device evidence:
+
+```text
+GhostLocProbe: gnss_started
+GhostLocProbe: gnss_first_fix=1100
+GhostLocProbe: nmea=$GPGGA,032329.00,3541.3700,N,13941.5020,E,1,12,0.9,80.0,M,0.0,M,,*69
+GhostLocProbe: nmea=$GPRMC,032329.00,A,3541.3700,N,13941.5020,E,5.9,0.0,220526,,*39
+GhostLocProbe: nmea=$GPGSA,A,3,03,07,09,16,19,22,26,28,31,14,18,1.2,0.9,1.5*12
+GhostLocProbe: nmea=$GPGSV,3,1,12,18,36,265,42,18,80,035,30,17,79,071,31,20,61,319,30*76
+GhostLocProbe: gps_status_event=1 snapshot=null
+GhostLocProbe: gps_status_event=3 snapshot=null
+GhostLocProbe: gps_status_event=4 snapshot=null
+```
+
+Phase 4 notes:
+
+- on the OnePlus7 Android 15 path, `GnssStatus.Callback` and NMEA listener
+  spoofing are working and sufficient for the owned probe acceptance criteria
+- legacy `GpsStatus.Listener` receives synthetic event codes, but
+  `LocationManager.getGpsStatus(null)` still reports `null` on this ROM and
+  should be treated as a compatibility follow-up rather than a blocker
+- the implementation is defensive: missing GNSS fields or callback methods
+  degrade quietly instead of crashing the target process
+
 ## Current Build Artifacts
 
 ```text
@@ -381,6 +457,7 @@ Known gaps:
 - app-side direct hidden `ILocationManager` reflection is filtered on Android 15
 - broader third-party app service-path compatibility checks
 - vendor fused-location implementations
-- GNSS, NMEA, AGPS, and satellite status synthesis
+- legacy `LocationManager.getGpsStatus(null)` snapshot still returns `null` on
+  the current ROM even though the GNSS/NMEA callback paths are spoofed
 - route-management UI equivalent to a polished product
 - broader Android/ROM compatibility matrix

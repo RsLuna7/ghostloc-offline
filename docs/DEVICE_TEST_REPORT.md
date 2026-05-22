@@ -193,6 +193,43 @@ Result:
 - no `GhostLocModule` exception, error, failed, or skipped lines were present in
   the captured telephony log evidence.
 
+### Phase 4 GNSS Status and NMEA
+
+Test coordinate:
+
+```text
+35.689500,139.691700
+```
+
+The APKs were rebuilt, reinstalled, and the device was rebooted so the updated
+GNSS/NMEA hooks would reload into the probe process.
+
+Runtime GNSS/NMEA evidence:
+
+```text
+GhostLocProbe: gnss_started
+GhostLocProbe: gnss_first_fix=1100
+GhostLocProbe: nmea=$GPGGA,032329.00,3541.3700,N,13941.5020,E,1,12,0.9,80.0,M,0.0,M,,*69
+GhostLocProbe: nmea=$GPRMC,032329.00,A,3541.3700,N,13941.5020,E,5.9,0.0,220526,,*39
+GhostLocProbe: nmea=$GPGSA,A,3,03,07,09,16,19,22,26,28,31,14,18,1.2,0.9,1.5*12
+GhostLocProbe: nmea=$GPGSV,3,1,12,18,36,265,42,18,80,035,30,17,79,071,31,20,61,319,30*76
+GhostLocProbe: nmea=$GPGSV,3,2,12,22,33,167,28,19,29,087,36,24,21,150,39,35,27,204,43*71
+GhostLocProbe: nmea=$GPGSV,3,3,12,35,16,241,37,20,14,186,37,21,57,005,41,37,72,314,33*72
+GhostLocProbe: gps_status_event=1 snapshot=null
+GhostLocProbe: gps_status_event=3 snapshot=null
+GhostLocProbe: gps_status_event=4 snapshot=null
+```
+
+Result:
+
+- `GnssStatus.Callback` received synthetic `onStarted` and `onFirstFix`.
+- `OnNmeaMessageListener` received GGA, RMC, GSA, and multi-part GSV sentences.
+- NMEA latitude/longitude matched the spoof coordinate `35.689500,139.691700`.
+- legacy `GpsStatus.Listener` received synthetic start / first-fix / satellite
+  event codes.
+- `LocationManager.getGpsStatus(null)` still returned `null` on this ROM, but it
+  did not block the GNSS/NMEA callback acceptance path.
+
 ### Module Load
 
 ```text
@@ -237,6 +274,7 @@ Pass for the currently implemented public API surfaces:
 - Basic telephony fields are cleaned.
 - Structured LTE/NR `CellInfo` synthesis is active.
 - `requestCellInfoUpdate()` synthetic callback path is active.
+- `GnssStatus.Callback` and NMEA synthetic callback paths are active.
 - Provider status and Geocoder are spoofed.
 - Command bridge is observed without LSPosed error stacks after the read-only
   remote preferences fix.
@@ -247,6 +285,7 @@ Pass for the currently implemented public API surfaces:
   by Android 15 hidden API filtering
 - separate ordinary third-party demo app validation
 - module disable/restore-real-location validation
-- GNSS/NMEA callbacks
+- legacy `LocationManager.getGpsStatus(null)` snapshot remains `null` on the
+  current ROM
 - vendor fused-location process behavior
 - multi-device / multi-ROM test matrix

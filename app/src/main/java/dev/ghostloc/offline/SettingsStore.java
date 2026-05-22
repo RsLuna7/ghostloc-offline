@@ -17,6 +17,9 @@ final class SettingsStore {
     static final String CELL_COUNTRY_ISO = "cell_country_iso";
     static final String CELL_OPERATOR_NAME = "cell_operator_name";
     static final String CELL_ENABLE_NR = "cell_enable_nr";
+    static final String GNSS_SAT_COUNT = "gnss_sat_count";
+    static final String NMEA_ENABLED = "nmea_enabled";
+    static final String AGPS_ENABLED = "agps_enabled";
     static final String MOVEMENT = "movement";
     static final String STARTED_AT = "started_at";
     static final String FAVORITES = "favorites";
@@ -28,6 +31,7 @@ final class SettingsStore {
     static final double DEFAULT_ALTITUDE = 80.0;
     static final float DEFAULT_ACCURACY = 25.0f;
     static final float DEFAULT_BEARING = 0.0f;
+    static final int DEFAULT_GNSS_SAT_COUNT = 12;
 
     private SettingsStore() {
     }

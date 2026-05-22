@@ -5,7 +5,7 @@ offline MVP toward a more complete original-equivalent feature set.
 
 ## Current Completion
 
-Approximate completion: 80-85% of the visible/core feature surface.
+Approximate completion: 85-90% of the visible/core feature surface.
 
 Completed:
 
@@ -21,13 +21,13 @@ Completed:
 - basic telephony cleanup
 - Android 15 OnePlus7 `system_server` location service hooks
 - structured LTE/NR `CellInfo` synthesis
+- GNSS status and NMEA callback synthesis
 - owned probe app and real-device verification
 
 Not complete:
 
 - broader third-party app service-path compatibility checks
 - vendor fused-location hooks
-- GNSS/NMEA/satellite state
 - polished route UI and product controls
 - broad compatibility testing
 
@@ -163,34 +163,45 @@ Phase 3 residual gaps:
 
 Goal: make GPS environment data consistent with the spoofed location.
 
+Status: implemented and verified on OnePlus7 / GM1901 / Android SDK 35 for the
+owned probe callback path.
+
 Work items:
 
-- hook `GnssStatus.Callback`
-- hook legacy `GpsStatus.Listener` where available
-- hook `OnNmeaMessageListener`
-- generate stable satellite constellation data:
+- hook `GnssStatus.Callback` - done
+- hook legacy `GpsStatus.Listener` where available - done for event delivery
+- hook `OnNmeaMessageListener` - done
+- generate stable satellite constellation data - done:
   - satellite count
   - SNR/CN0
   - azimuth
   - elevation
   - used-in-fix flags
-- generate NMEA sentences:
+- generate NMEA sentences - done:
   - `$GPGGA`
   - `$GPRMC`
   - `$GPGSA`
   - `$GPGSV`
-- derive NMEA latitude/longitude/time/speed/course from current spoof state
-- add UI controls:
+- derive NMEA latitude/longitude/time/speed/course from current spoof state - done
+- add UI controls - backend storage keys added, app UI still open:
   - satellite count
   - NMEA enable
   - AGPS enable
 
 Acceptance criteria:
 
-- probe receives GNSS status callbacks
-- probe receives NMEA messages
-- NMEA coordinate matches selected coordinate
-- satellite state remains stable across repeated reads
+- probe receives GNSS status callbacks - done
+- probe receives NMEA messages - done
+- NMEA coordinate matches selected coordinate - done
+- satellite state remains stable across repeated reads - done for current owned
+  probe path
+
+Phase 4 residual gaps:
+
+- `LocationManager.getGpsStatus(null)` still returns `null` on the current ROM,
+  even though the GNSS callback and NMEA paths are spoofed
+- the `gnss_sat_count` / `nmea_enabled` / `agps_enabled` settings are stored but
+  not yet exposed as polished UI controls
 
 ## Phase 5 - Product Completeness
 
@@ -236,13 +247,11 @@ Acceptance criteria:
 
 ## Recommended Execution Order
 
-1. Phase 4: GNSS/NMEA
-2. Phase 2: vendor fused-location coverage
-3. Phase 5: product completeness
+1. Phase 2: vendor fused-location coverage
+2. Phase 5: product completeness
 
 Reasoning:
 
-- Phase 1 and Phase 3 are already in place on the owned Android 15 path.
-- Phase 4 is the main realism gap now.
-- Phase 2 still needs per-ROM discovery and should be added after GNSS/NMEA.
-- Phase 5 is best done after the behavior surface stops moving.
+- Phases 1, 3, and 4 are already in place on the owned Android 15 path.
+- Phase 2 is the main remaining behavior gap.
+- Phase 5 should follow once the provider/process surface is stable.

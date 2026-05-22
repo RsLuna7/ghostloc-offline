@@ -4,12 +4,16 @@ import android.bluetooth.BluetoothAdapter;
 import android.content.SharedPreferences;
 import android.location.Address;
 import android.location.Geocoder;
+import android.location.GnssStatus;
+import android.location.GpsStatus;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.location.OnNmeaMessageListener;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.CancellationSignal;
+import android.os.Handler;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.SupplicantState;
@@ -104,6 +108,13 @@ public final class GhostLocModule extends XposedModule {
                     bridge.hook(method, ProviderEnabledHooker.class);
                 } else if ("getBestProvider".equals(name)) {
                     bridge.hook(method, BestProviderHooker.class);
+                } else if ("getGpsStatus".equals(name)) {
+                    bridge.hook(method, GpsStatusHooker.class);
+                } else if ("registerGnssStatusCallback".equals(name)
+                        || "addGpsStatusListener".equals(name)) {
+                    bridge.hook(method, GnssStatusRegistrationHooker.class);
+                } else if ("addNmeaListener".equals(name)) {
+                    bridge.hook(method, NmeaListenerHooker.class);
                 } else if ("sendExtraCommand".equals(name)) {
                     bridge.hook(method, ExtraCommandHooker.class);
                 }
@@ -431,6 +442,46 @@ public final class GhostLocModule extends XposedModule {
                 if (arg instanceof Consumer<?> consumer) {
                     dispatchConsumer(executor, consumer, location);
                 }
+            }
+        }
+    }
+
+    public static final class GpsStatusHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            callback.returnAndSkip(makeGpsStatus());
+        }
+    }
+
+    public static final class GnssStatusRegistrationHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            Object member = callback.getMember();
+            String name = member instanceof Method method ? method.getName() : "";
+            boolean handled;
+            if ("addGpsStatusListener".equals(name)) {
+                handled = dispatchLegacyGpsStatus(callback.getArgs());
+            } else {
+                handled = dispatchGnssStatusRegistration(callback.getArgs());
+            }
+            if (!handled) {
+                return;
+            }
+            callback.returnAndSkip(true);
+        }
+    }
+
+    public static final class NmeaListenerHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            if (dispatchNmeaListeners(callback.getArgs())) {
+                callback.returnAndSkip(true);
             }
         }
     }
@@ -905,6 +956,282 @@ public final class GhostLocModule extends XposedModule {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static GpsStatus makeGpsStatus() {
+        GnssStatus gnssStatus = makeGnssStatus();
+        if (gnssStatus == null) {
+            return null;
+        }
+        try {
+            return GpsStatus.create(gnssStatus, 1100);
+        } catch (Throwable throwable) {
+            return null;
+        }
+    }
+
+    private static GnssStatus makeGnssStatus() {
+        GnssProfile profile = currentGnssProfile();
+        GnssStatus status = newInstance(GnssStatus.class);
+        if (status == null) {
+            return null;
+        }
+        int count = profile.satellites.length;
+        int[] svidWithFlags = new int[count];
+        float[] cn0 = new float[count];
+        float[] elevations = new float[count];
+        float[] azimuths = new float[count];
+        float[] carrierFrequencies = new float[count];
+        float[] basebandCn0 = new float[count];
+        for (int i = 0; i < count; i++) {
+            GnssSatelliteProfile satellite = profile.satellites[i];
+            svidWithFlags[i] = encodeGnssSvidWithFlags(satellite);
+            cn0[i] = satellite.cn0DbHz;
+            elevations[i] = satellite.elevationDegrees;
+            azimuths[i] = satellite.azimuthDegrees;
+            carrierFrequencies[i] = satellite.carrierFrequencyHz;
+            basebandCn0[i] = satellite.cn0DbHz - 1.5f;
+        }
+        setFieldIfPresent(status, "mSvCount", count);
+        setFieldIfPresent(status, "mSvidWithFlags", svidWithFlags);
+        setFieldIfPresent(status, "mCn0DbHzs", cn0);
+        setFieldIfPresent(status, "mElevations", elevations);
+        setFieldIfPresent(status, "mAzimuths", azimuths);
+        setFieldIfPresent(status, "mCarrierFrequencies", carrierFrequencies);
+        setFieldIfPresent(status, "mBasebandCn0DbHzs", basebandCn0);
+        return status;
+    }
+
+    private static int encodeGnssSvidWithFlags(GnssSatelliteProfile satellite) {
+        int flags = 0x1 | 0x2 | 0x8 | 0x10;
+        if (satellite.usedInFix) {
+            flags |= 0x4;
+        }
+        return (satellite.svid << 8) | (satellite.constellationType << 4) | flags;
+    }
+
+    private static GnssProfile currentGnssProfile() {
+        SharedPreferences sharedPreferences = prefs();
+        Location location = makeLocation(LocationManager.GPS_PROVIDER);
+        long seed = mixSeed(location.getLatitude(), location.getLongitude(),
+                "gnss", Integer.toString(sharedPreferences.getInt(
+                        SettingsStore.GNSS_SAT_COUNT, SettingsStore.DEFAULT_GNSS_SAT_COUNT)), "profile");
+        int satelliteCount = Math.max(4, Math.min(24,
+                sharedPreferences.getInt(SettingsStore.GNSS_SAT_COUNT, SettingsStore.DEFAULT_GNSS_SAT_COUNT)));
+        GnssSatelliteProfile[] satellites = new GnssSatelliteProfile[satelliteCount];
+        for (int i = 0; i < satelliteCount; i++) {
+            long itemSeed = Long.rotateLeft(seed, i + 3) ^ (i * 0x9e3779b9L);
+            int constellationType;
+            if (i % 6 == 4) {
+                constellationType = GnssStatus.CONSTELLATION_BEIDOU;
+            } else if (i % 6 == 5) {
+                constellationType = GnssStatus.CONSTELLATION_GLONASS;
+            } else {
+                constellationType = GnssStatus.CONSTELLATION_GPS;
+            }
+            int svid = 3 + positiveInt(itemSeed, 28) + i;
+            float cn0 = 28.0f + positiveInt(Long.rotateLeft(itemSeed, 7), 18);
+            float elevation = 12.0f + positiveInt(Long.rotateLeft(itemSeed, 11), 70);
+            float azimuth = positiveInt(Long.rotateLeft(itemSeed, 13), 360);
+            boolean usedInFix = i < Math.min(8, satelliteCount);
+            float carrierFrequency = constellationType == GnssStatus.CONSTELLATION_GLONASS
+                    ? 1_602_000_000f
+                    : 1_575_420_000f;
+            satellites[i] = new GnssSatelliteProfile(
+                    constellationType,
+                    svid,
+                    cn0,
+                    elevation,
+                    azimuth,
+                    carrierFrequency,
+                    usedInFix
+            );
+        }
+        return new GnssProfile(
+                satellites,
+                sharedPreferences.getBoolean(SettingsStore.NMEA_ENABLED, true),
+                sharedPreferences.getBoolean(SettingsStore.AGPS_ENABLED, true)
+        );
+    }
+
+    private static boolean dispatchGnssStatusRegistration(Object[] args) {
+        if (args == null) {
+            return false;
+        }
+        Executor executor = null;
+        Handler handler = null;
+        Object callback = null;
+        for (Object arg : args) {
+            if (arg instanceof Executor value) {
+                executor = value;
+            } else if (arg instanceof Handler value) {
+                handler = value;
+            } else if (arg != null && hasMethod(arg.getClass(), "onSatelliteStatusChanged", GnssStatus.class)) {
+                callback = arg;
+            }
+        }
+        if (callback == null) {
+            return false;
+        }
+        GnssStatus status = makeGnssStatus();
+        final Object callbackTarget = callback;
+        dispatchAsync(executor, handler, () -> {
+            tryInvoke(callbackTarget, "onStarted", new Class<?>[0], new Object[0]);
+            tryInvoke(callbackTarget, "onFirstFix", new Class<?>[]{int.class}, new Object[]{1100});
+            if (status != null) {
+                tryInvoke(callbackTarget, "onSatelliteStatusChanged",
+                        new Class<?>[]{GnssStatus.class}, new Object[]{status});
+            }
+        });
+        return true;
+    }
+
+    private static boolean dispatchLegacyGpsStatus(Object[] args) {
+        if (args == null) {
+            return false;
+        }
+        Object listener = null;
+        for (Object arg : args) {
+            if (arg != null && hasMethod(arg.getClass(), "onGpsStatusChanged", int.class)) {
+                listener = arg;
+                break;
+            }
+        }
+        if (listener == null) {
+            return false;
+        }
+        final Object callbackTarget = listener;
+        dispatchAsync(null, null, () -> {
+            tryInvoke(callbackTarget, "onGpsStatusChanged",
+                    new Class<?>[]{int.class}, new Object[]{GpsStatus.GPS_EVENT_STARTED});
+            tryInvoke(callbackTarget, "onGpsStatusChanged",
+                    new Class<?>[]{int.class}, new Object[]{GpsStatus.GPS_EVENT_FIRST_FIX});
+            tryInvoke(callbackTarget, "onGpsStatusChanged",
+                    new Class<?>[]{int.class}, new Object[]{GpsStatus.GPS_EVENT_SATELLITE_STATUS});
+        });
+        return true;
+    }
+
+    private static boolean dispatchNmeaListeners(Object[] args) {
+        if (args == null) {
+            return false;
+        }
+        Executor executor = null;
+        Handler handler = null;
+        Object listener = null;
+        for (Object arg : args) {
+            if (arg instanceof Executor value) {
+                executor = value;
+            } else if (arg instanceof Handler value) {
+                handler = value;
+            } else if (arg instanceof OnNmeaMessageListener
+                    || (arg != null && (hasMethod(arg.getClass(), "onNmeaMessage", String.class, long.class)
+                    || hasMethod(arg.getClass(), "onNmeaReceived", long.class, String.class)))) {
+                listener = arg;
+            }
+        }
+        if (listener == null) {
+            return false;
+        }
+        GnssProfile profile = currentGnssProfile();
+        if (!profile.nmeaEnabled) {
+            return true;
+        }
+        List<String> sentences = makeNmeaSentences(makeLocation(LocationManager.GPS_PROVIDER), profile);
+        final Object listenerTarget = listener;
+        dispatchAsync(executor, handler, () -> {
+            long timestamp = System.currentTimeMillis();
+            for (String sentence : sentences) {
+                if (!tryInvoke(listenerTarget, "onNmeaMessage",
+                        new Class<?>[]{String.class, long.class}, new Object[]{sentence, timestamp})) {
+                    tryInvoke(listenerTarget, "onNmeaReceived",
+                            new Class<?>[]{long.class, String.class}, new Object[]{timestamp, sentence});
+                }
+            }
+        });
+        return true;
+    }
+
+    private static void dispatchAsync(Executor executor, Handler handler, Runnable task) {
+        if (executor != null) {
+            executor.execute(task);
+        } else if (handler != null) {
+            handler.post(task);
+        } else {
+            task.run();
+        }
+    }
+
+    private static List<String> makeNmeaSentences(Location location, GnssProfile profile) {
+        ArrayList<String> sentences = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        String utcTime = nmeaUtcTime(now);
+        String utcDate = nmeaUtcDate(now);
+        String lat = nmeaCoordinate(Math.abs(location.getLatitude()), true);
+        String latHemisphere = location.getLatitude() >= 0 ? "N" : "S";
+        String lon = nmeaCoordinate(Math.abs(location.getLongitude()), false);
+        String lonHemisphere = location.getLongitude() >= 0 ? "E" : "W";
+        sentences.add(withNmeaChecksum(String.format(Locale.US,
+                "$GPGGA,%s,%s,%s,%s,%s,1,%02d,0.9,%.1f,M,0.0,M,,",
+                utcTime, lat, latHemisphere, lon, lonHemisphere, profile.satellites.length,
+                location.getAltitude())));
+        sentences.add(withNmeaChecksum(String.format(Locale.US,
+                "$GPRMC,%s,A,%s,%s,%s,%s,%.1f,%.1f,%s,,",
+                utcTime, lat, latHemisphere, lon, lonHemisphere,
+                location.getSpeed() * 1.9438445f, location.getBearing(), utcDate)));
+        sentences.add(withNmeaChecksum(String.format(Locale.US,
+                "$GPGSA,A,3,03,07,09,16,19,22,26,28,31,14,18,1.2,0.9,1.5",
+                utcTime)));
+        int totalMessages = (profile.satellites.length + 3) / 4;
+        for (int messageIndex = 0; messageIndex < totalMessages; messageIndex++) {
+            StringBuilder builder = new StringBuilder("$GPGSV,")
+                    .append(totalMessages).append(',')
+                    .append(messageIndex + 1).append(',')
+                    .append(String.format(Locale.US, "%02d", profile.satellites.length));
+            for (int i = messageIndex * 4; i < Math.min(profile.satellites.length, (messageIndex + 1) * 4); i++) {
+                GnssSatelliteProfile satellite = profile.satellites[i];
+                builder.append(',').append(String.format(Locale.US, "%02d", satellite.svid))
+                        .append(',').append(String.format(Locale.US, "%02.0f", satellite.elevationDegrees))
+                        .append(',').append(String.format(Locale.US, "%03.0f", satellite.azimuthDegrees))
+                        .append(',').append(String.format(Locale.US, "%02.0f", satellite.cn0DbHz));
+            }
+            sentences.add(withNmeaChecksum(builder.toString()));
+        }
+        return sentences;
+    }
+
+    private static String nmeaUtcTime(long epochMillis) {
+        java.util.Calendar calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+        calendar.setTimeInMillis(epochMillis);
+        return String.format(Locale.US, "%02d%02d%02d.00",
+                calendar.get(java.util.Calendar.HOUR_OF_DAY),
+                calendar.get(java.util.Calendar.MINUTE),
+                calendar.get(java.util.Calendar.SECOND));
+    }
+
+    private static String nmeaUtcDate(long epochMillis) {
+        java.util.Calendar calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+        calendar.setTimeInMillis(epochMillis);
+        return String.format(Locale.US, "%02d%02d%02d",
+                calendar.get(java.util.Calendar.DAY_OF_MONTH),
+                calendar.get(java.util.Calendar.MONTH) + 1,
+                calendar.get(java.util.Calendar.YEAR) % 100);
+    }
+
+    private static String nmeaCoordinate(double absoluteValue, boolean latitude) {
+        int degrees = (int) absoluteValue;
+        double minutes = (absoluteValue - degrees) * 60.0;
+        return latitude
+                ? String.format(Locale.US, "%02d%07.4f", degrees, minutes)
+                : String.format(Locale.US, "%03d%07.4f", degrees, minutes);
+    }
+
+    private static String withNmeaChecksum(String sentence) {
+        int checksum = 0;
+        for (int i = 1; i < sentence.length(); i++) {
+            checksum ^= sentence.charAt(i);
+        }
+        return sentence + '*' + String.format(Locale.US, "%02X", checksum);
     }
 
     private static List<CellInfo> makeCellInfoList() {
@@ -1443,6 +1770,46 @@ public final class GhostLocModule extends XposedModule {
             }
         }
         return false;
+    }
+
+    private static final class GnssSatelliteProfile {
+        final int constellationType;
+        final int svid;
+        final float cn0DbHz;
+        final float elevationDegrees;
+        final float azimuthDegrees;
+        final float carrierFrequencyHz;
+        final boolean usedInFix;
+
+        GnssSatelliteProfile(
+                int constellationType,
+                int svid,
+                float cn0DbHz,
+                float elevationDegrees,
+                float azimuthDegrees,
+                float carrierFrequencyHz,
+                boolean usedInFix
+        ) {
+            this.constellationType = constellationType;
+            this.svid = svid;
+            this.cn0DbHz = cn0DbHz;
+            this.elevationDegrees = elevationDegrees;
+            this.azimuthDegrees = azimuthDegrees;
+            this.carrierFrequencyHz = carrierFrequencyHz;
+            this.usedInFix = usedInFix;
+        }
+    }
+
+    private static final class GnssProfile {
+        final GnssSatelliteProfile[] satellites;
+        final boolean nmeaEnabled;
+        final boolean agpsEnabled;
+
+        GnssProfile(GnssSatelliteProfile[] satellites, boolean nmeaEnabled, boolean agpsEnabled) {
+            this.satellites = satellites;
+            this.nmeaEnabled = nmeaEnabled;
+            this.agpsEnabled = agpsEnabled;
+        }
     }
 
     private static final class CarrierPreset {

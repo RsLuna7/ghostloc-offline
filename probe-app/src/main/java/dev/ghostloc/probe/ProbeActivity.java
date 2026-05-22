@@ -9,6 +9,9 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.location.Criteria;
 import android.location.Geocoder;
+import android.location.GnssStatus;
+import android.location.GpsSatellite;
+import android.location.GpsStatus;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.CancellationSignal;
@@ -29,6 +32,7 @@ import android.widget.TextView;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.StringJoiner;
@@ -66,6 +70,7 @@ public final class ProbeActivity extends Activity {
     private void runProbe() {
         StringBuilder report = new StringBuilder();
         probeLocation(report);
+        probeGnss(report);
         probeGeocoder(report);
         probeSettings(report);
         probeWifi(report);
@@ -264,6 +269,79 @@ public final class ProbeActivity extends Activity {
             cls = cls.getSuperclass();
         }
         return null;
+    }
+
+    private void probeGnss(StringBuilder report) {
+        try {
+            LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (manager == null) {
+                report.append("gnss_manager=null\n");
+                return;
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                manager.registerGnssStatusCallback(
+                        Executors.newSingleThreadExecutor(),
+                        new GnssStatus.Callback() {
+                            @Override
+                            public void onStarted() {
+                                Log.i(TAG, "gnss_started");
+                            }
+
+                            @Override
+                            public void onFirstFix(int ttffMillis) {
+                                Log.i(TAG, "gnss_first_fix=" + ttffMillis);
+                            }
+
+                            @Override
+                            public void onSatelliteStatusChanged(GnssStatus status) {
+                                Log.i(TAG, "gnss_status=" + describeGnssStatus(status));
+                            }
+                        });
+            }
+            manager.addGpsStatusListener(event ->
+                    Log.i(TAG, "gps_status_event=" + event + " snapshot=" + describeGpsStatus(manager.getGpsStatus(null))));
+            manager.addNmeaListener(
+                    Executors.newSingleThreadExecutor(),
+                    (message, timestamp) -> Log.i(TAG, "nmea=" + message));
+            GpsStatus gpsStatus = manager.getGpsStatus(null);
+            report.append("gps_status=").append(describeGpsStatus(gpsStatus)).append("\n");
+        } catch (Throwable throwable) {
+            report.append("gnss_error=").append(throwable.getClass().getSimpleName()).append("\n");
+        }
+    }
+
+    private String describeGnssStatus(GnssStatus status) {
+        if (status == null) {
+            return "null";
+        }
+        StringJoiner joiner = new StringJoiner(" | ");
+        for (int i = 0; i < status.getSatelliteCount(); i++) {
+            joiner.add(String.format(Locale.US, "#%d c=%d cn0=%.1f el=%.1f az=%.1f used=%s",
+                    status.getSvid(i),
+                    status.getConstellationType(i),
+                    status.getCn0DbHz(i),
+                    status.getElevationDegrees(i),
+                    status.getAzimuthDegrees(i),
+                    status.usedInFix(i)));
+        }
+        return "count=" + status.getSatelliteCount() + " " + joiner;
+    }
+
+    private String describeGpsStatus(GpsStatus status) {
+        if (status == null) {
+            return "null";
+        }
+        List<String> satellites = new ArrayList<>();
+        for (GpsSatellite satellite : status.getSatellites()) {
+            satellites.add(String.format(Locale.US, "#%d snr=%.1f el=%.1f az=%.1f used=%s",
+                    satellite.getPrn(),
+                    satellite.getSnr(),
+                    satellite.getElevation(),
+                    satellite.getAzimuth(),
+                    satellite.usedInFix()));
+        }
+        return "ttff=" + status.getTimeToFirstFix() + " count=" + satellites.size()
+                + " " + String.join(" | ", satellites);
     }
 
     private void probeGeocoder(StringBuilder report) {
