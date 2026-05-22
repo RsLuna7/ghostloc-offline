@@ -7,6 +7,7 @@ import android.location.Geocoder;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.net.wifi.WifiInfo;
@@ -21,8 +22,10 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
@@ -36,6 +39,8 @@ public final class GhostLocModule extends XposedModule {
     private static final String TAG = "GhostLocModule";
     private static final String SELF_PACKAGE = "dev.ghostloc.offline";
     private static final String BRIDGE_PROVIDER = "ghostloc";
+    private static final Set<String> INSTALLED_DEEP_HOOKS = Collections.synchronizedSet(new HashSet<>());
+    private static final Set<String> LOGGED_HITS = Collections.synchronizedSet(new HashSet<>());
     private static volatile XposedInterface bridge;
     private static volatile SharedPreferences prefs;
 
@@ -49,6 +54,7 @@ public final class GhostLocModule extends XposedModule {
     @Override
     public void onSystemServerLoaded(SystemServerLoadedParam param) {
         installLocationManagerHooks();
+        installDeepLocationServiceHooks(param.getClassLoader());
         installSettingsHooks();
         log("system_server hooks installed");
     }
@@ -91,6 +97,97 @@ public final class GhostLocModule extends XposedModule {
             }
         } catch (Throwable throwable) {
             log("LocationManager hook failed", throwable);
+        }
+    }
+
+    private static void installDeepLocationServiceHooks(ClassLoader loader) {
+        hookServiceClass(loader, "com.android.server.location.LocationManagerService", true);
+        hookServiceClass(loader, "android.location.ILocationManager$Stub", true);
+        hookServiceClass(loader, "com.android.server.location.provider.LocationProviderManager", true);
+        hookServiceClass(loader, "com.android.server.location.provider.AbstractLocationProvider", true);
+        hookServiceClass(loader, "com.android.server.location.gnss.hal.GnssNative", true);
+    }
+
+    private static void hookServiceClass(ClassLoader loader, String className, boolean discover) {
+        Class<?> cls = findClass(loader, className);
+        if (cls == null) {
+            log("deep class missing " + className);
+            return;
+        }
+        if (discover) {
+            logTargetMethods(cls);
+        }
+        int hooks = 0;
+        for (Method method : cls.getDeclaredMethods()) {
+            String name = method.getName();
+            Class<?> returnType = method.getReturnType();
+            Class<? extends XposedInterface.Hooker> hooker = null;
+            if ("getLastLocation".equals(name) && returnType == Location.class) {
+                hooker = ServiceLocationReturnHooker.class;
+            } else if ("getCurrentLocation".equals(name)) {
+                hooker = ServiceCurrentLocationHooker.class;
+            } else if ("requestLocationUpdates".equals(name)
+                    || "registerLocationListener".equals(name)) {
+                hooker = ServiceListenerHooker.class;
+            } else if ("removeUpdates".equals(name)) {
+                hooker = ServiceTraceHooker.class;
+            } else if ("reportLocation".equals(name)) {
+                hooker = ServiceReportLocationHooker.class;
+            } else if ("onTransact".equals(name) && "android.location.ILocationManager$Stub".equals(className)) {
+                hooker = ServiceTraceHooker.class;
+            }
+            if (hooker != null && hookMethodOnce(method, hooker)) {
+                hooks++;
+            }
+        }
+        log("deep hooks " + className + " installed=" + hooks);
+    }
+
+    private static Class<?> findClass(ClassLoader loader, String className) {
+        try {
+            return Class.forName(className, false, loader);
+        } catch (Throwable first) {
+            try {
+                return Class.forName(className);
+            } catch (Throwable second) {
+                return null;
+            }
+        }
+    }
+
+    private static boolean hookMethodOnce(Method method, Class<? extends XposedInterface.Hooker> hooker) {
+        String key = method.getDeclaringClass().getName() + "#" + methodSignature(method);
+        if (!INSTALLED_DEEP_HOOKS.add(key)) {
+            return false;
+        }
+        try {
+            method.setAccessible(true);
+            bridge.hook(method, hooker);
+            log("deep hook installed " + key);
+            return true;
+        } catch (Throwable throwable) {
+            INSTALLED_DEEP_HOOKS.remove(key);
+            log("deep hook skipped " + key, throwable);
+            return false;
+        }
+    }
+
+    private static void logTargetMethods(Class<?> cls) {
+        try {
+            for (Method method : cls.getDeclaredMethods()) {
+                String name = method.getName();
+                if ("getLastLocation".equals(name)
+                        || "requestLocationUpdates".equals(name)
+                        || "getCurrentLocation".equals(name)
+                        || "registerLocationListener".equals(name)
+                        || "removeUpdates".equals(name)
+                        || "reportLocation".equals(name)
+                        || "onTransact".equals(name)) {
+                    log("deep method " + cls.getName() + "#" + methodSignature(method));
+                }
+            }
+        } catch (Throwable throwable) {
+            log("deep method discovery failed " + cls.getName(), throwable);
         }
     }
 
@@ -224,6 +321,74 @@ public final class GhostLocModule extends XposedModule {
             }
             String provider = providerFrom(callback.getArgs());
             callback.returnAndSkip(makeLocation(provider));
+        }
+    }
+
+    public static final class ServiceLocationReturnHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            logHit(callback, "service return");
+            callback.returnAndSkip(makeLocation(providerFrom(callback.getArgs())));
+        }
+    }
+
+    public static final class ServiceCurrentLocationHooker implements XposedInterface.Hooker {
+        public static void after(XposedInterface.AfterHookCallback callback) {
+            if (!active() || callback.getThrowable() != null) {
+                return;
+            }
+            logHit(callback, "service current");
+            dispatchLocationCallbacks(callback.getArgs(), makeLocation(providerFrom(callback.getArgs())));
+        }
+    }
+
+    public static final class ServiceListenerHooker implements XposedInterface.Hooker {
+        public static void after(XposedInterface.AfterHookCallback callback) {
+            if (!active() || callback.getThrowable() != null) {
+                return;
+            }
+            logHit(callback, "service listener");
+            dispatchLocationCallbacks(callback.getArgs(), makeLocation(providerFrom(callback.getArgs())));
+        }
+    }
+
+    public static final class ServiceReportLocationHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            Object[] args = callback.getArgs();
+            if (args == null) {
+                return;
+            }
+            boolean replaced = false;
+            Location location = makeLocation(providerFrom(args));
+            for (int i = 0; i < args.length; i++) {
+                Object arg = args[i];
+                if (arg instanceof Location) {
+                    args[i] = location;
+                    replaced = true;
+                } else {
+                    Object result = replaceLocationResult(arg, location);
+                    if (result != arg) {
+                        args[i] = result;
+                        replaced = true;
+                    }
+                }
+            }
+            if (replaced) {
+                logHit(callback, "service report replaced");
+            } else {
+                logHit(callback, "service report observed");
+            }
+        }
+    }
+
+    public static final class ServiceTraceHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            logHit(callback, "service trace uid=" + Binder.getCallingUid());
         }
     }
 
@@ -615,6 +780,85 @@ public final class GhostLocModule extends XposedModule {
         }
     }
 
+    private static void dispatchLocationCallbacks(Object[] args, Location location) {
+        if (args == null) {
+            return;
+        }
+        for (Object arg : args) {
+            if (arg == null) {
+                continue;
+            }
+            if (arg instanceof LocationListener listener) {
+                try {
+                    listener.onLocationChanged(location);
+                } catch (Throwable throwable) {
+                    log("service listener dispatch failed", throwable);
+                }
+                continue;
+            }
+            if (tryDispatchRemoteLocation(arg, location)) {
+                continue;
+            }
+            tryDispatchRemoteLocationList(arg, location);
+        }
+    }
+
+    private static boolean tryDispatchRemoteLocation(Object target, Location location) {
+        String[] names = {"onLocation", "onLocationChanged"};
+        for (String name : names) {
+            if (tryInvoke(target, name, new Class<?>[]{Location.class}, new Object[]{location})) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean tryDispatchRemoteLocationList(Object target, Location location) {
+        Object locationResult = makeLocationResult(location);
+        if (locationResult != null
+                && tryInvoke(target, "onLocationChanged",
+                new Class<?>[]{locationResult.getClass()},
+                new Object[]{locationResult})) {
+            return true;
+        }
+        return tryInvoke(target, "onLocationChanged", new Class<?>[]{List.class},
+                new Object[]{Collections.singletonList(location)});
+    }
+
+    private static Object replaceLocationResult(Object candidate, Location location) {
+        if (candidate == null) {
+            return candidate;
+        }
+        if (!"android.location.LocationResult".equals(candidate.getClass().getName())) {
+            return candidate;
+        }
+        Object replacement = makeLocationResult(location);
+        return replacement == null ? candidate : replacement;
+    }
+
+    private static Object makeLocationResult(Location location) {
+        Class<?> cls = findClass(GhostLocModule.class.getClassLoader(), "android.location.LocationResult");
+        if (cls == null) {
+            return null;
+        }
+        List<Location> locations = Collections.singletonList(location);
+        Object result = tryStaticInvoke(cls, "wrap", new Class<?>[]{List.class}, new Object[]{locations});
+        if (result != null) {
+            return result;
+        }
+        result = tryStaticInvoke(cls, "create", new Class<?>[]{List.class}, new Object[]{locations});
+        if (result != null) {
+            return result;
+        }
+        try {
+            Method method = cls.getDeclaredMethod("create", Location[].class);
+            method.setAccessible(true);
+            return method.invoke(null, new Object[]{new Location[]{location}});
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static ServiceState makeServiceState() {
         ServiceState serviceState = new ServiceState();
         tryInvoke(serviceState, "setState", new Class<?>[]{int.class}, new Object[]{ServiceState.STATE_IN_SERVICE});
@@ -625,11 +869,23 @@ public final class GhostLocModule extends XposedModule {
         return serviceState;
     }
 
-    private static void tryInvoke(Object target, String methodName, Class<?>[] types, Object[] args) {
+    private static boolean tryInvoke(Object target, String methodName, Class<?>[] types, Object[] args) {
         try {
             Method method = target.getClass().getMethod(methodName, types);
             method.invoke(target, args);
+            return true;
         } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Object tryStaticInvoke(Class<?> cls, String methodName, Class<?>[] types, Object[] args) {
+        try {
+            Method method = cls.getDeclaredMethod(methodName, types);
+            method.setAccessible(true);
+            return method.invoke(null, args);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
@@ -669,7 +925,28 @@ public final class GhostLocModule extends XposedModule {
                 return value;
             }
         }
+        for (Object arg : args) {
+            String provider = providerFromRequest(arg);
+            if (provider != null) {
+                return provider;
+            }
+        }
         return LocationManager.GPS_PROVIDER;
+    }
+
+    private static String providerFromRequest(Object candidate) {
+        if (candidate == null) {
+            return null;
+        }
+        try {
+            Method method = candidate.getClass().getMethod("getProvider");
+            Object value = method.invoke(candidate);
+            if (value instanceof String provider && provider.length() > 0) {
+                return provider;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private static boolean isKnownProviderArg(Object[] args) {
@@ -745,6 +1022,45 @@ public final class GhostLocModule extends XposedModule {
             prefs = current;
         }
         return current;
+    }
+
+    private static void logHit(XposedInterface.BeforeHookCallback callback, String prefix) {
+        Object member = callback.getMember();
+        String key = prefix + " " + (member instanceof Method method
+                ? method.getDeclaringClass().getName() + "#" + methodSignature(method)
+                : String.valueOf(member));
+        if (LOGGED_HITS.add(key)) {
+            log(key);
+        }
+    }
+
+    private static void logHit(XposedInterface.AfterHookCallback callback, String prefix) {
+        Object member = callback.getMember();
+        String key = prefix + " " + (member instanceof Method method
+                ? method.getDeclaringClass().getName() + "#" + methodSignature(method)
+                : String.valueOf(member));
+        if (LOGGED_HITS.add(key)) {
+            log(key);
+        }
+    }
+
+    private static String methodSignature(Method method) {
+        StringBuilder builder = new StringBuilder(method.getName()).append('(');
+        Class<?>[] params = method.getParameterTypes();
+        for (int i = 0; i < params.length; i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            builder.append(simpleTypeName(params[i]));
+        }
+        return builder.append("):").append(simpleTypeName(method.getReturnType())).toString();
+    }
+
+    private static String simpleTypeName(Class<?> type) {
+        if (type.isArray()) {
+            return simpleTypeName(type.getComponentType()) + "[]";
+        }
+        return type.getName();
     }
 
     private static void log(String message) {

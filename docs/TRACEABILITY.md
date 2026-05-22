@@ -199,6 +199,90 @@ GhostLocProbe: wifi_mac=02:00:00:00:00:00 bssid=02:00:00:00:00:00 ssid="GhostLoc
 GhostLocProbe: network_type=13 phone_type=1 operator=00101 operator_name=GhostLoc country=us roaming=false cells=0
 ```
 
+### Phase 1 - Add deep system_server location service hooks
+
+Purpose:
+
+- implement Phase 1 of `docs/REPLICATION_PLAN.md`
+- move beyond app-level `LocationManager` hooks into the Android 15
+  `system_server` service/binder path
+- keep all private API handling defensive: missing classes, missing methods, and
+  unsupported signatures log and skip instead of crashing
+
+Main files:
+
+```text
+app/src/main/java/dev/ghostloc/offline/GhostLocModule.java
+app/src/main/resources/META-INF/xposed/scope.list
+probe-app/src/main/java/dev/ghostloc/probe/ProbeActivity.java
+docs/DEVICE_TEST_REPORT.md
+docs/REPLICATION_PLAN.md
+```
+
+Static ROM inspection:
+
+- pulled `/system/framework/services.jar` and `/system/framework/framework.jar`
+  from the OnePlus7 test device
+- used Android SDK `dexdump` to inspect the Android 15 service signatures
+- confirmed `com.android.server.location.LocationManagerService` extends
+  `android.location.ILocationManager$Stub`
+- observed Android 15 service signatures including:
+  - `LocationManagerService#getLastLocation(String, LastLocationRequest, String, String): Location`
+  - `LocationManagerService#getCurrentLocation(String, LocationRequest, ILocationCallback, String, String, String): ICancellationSignal`
+  - `LocationManagerService#registerLocationListener(String, LocationRequest, ILocationListener, String, String, String): void`
+  - `LocationProviderManager#getLastLocation(LastLocationRequest, CallerIdentity, int): Location`
+  - `LocationProviderManager#getCurrentLocation(LocationRequest, CallerIdentity, int, ILocationCallback): ICancellationSignal`
+  - `AbstractLocationProvider#reportLocation(LocationResult): void`
+  - `GnssNative#reportLocation(boolean, Location): void`
+
+Implemented:
+
+- deep hook installer for:
+  - `com.android.server.location.LocationManagerService`
+  - `android.location.ILocationManager$Stub`
+  - `com.android.server.location.provider.LocationProviderManager`
+  - `com.android.server.location.provider.AbstractLocationProvider`
+  - `com.android.server.location.gnss.hal.GnssNative`
+- reflection-based method discovery for target service classes
+- defensive one-time method hook registration keyed by runtime signatures
+- service return spoofing for `getLastLocation`
+- callback spoofing for `getCurrentLocation`, `requestLocationUpdates`, and
+  `registerLocationListener`
+- `ILocationManager$Stub#onTransact` binder-entry trace logging
+- inbound `reportLocation` replacement for `Location` and best-effort
+  `LocationResult` factory paths
+- probe-app logging split into:
+  - `public_last_location`
+  - `public_current_location`
+  - `public_listener_location`
+  - `binder_service`
+  - `binder_reflection_error`
+- module metadata scope now includes `dev.ghostloc.probe`
+
+Real-device evidence:
+
+```text
+GhostLocModule: service trace uid=10500 android.location.ILocationManager$Stub#onTransact(int,android.os.Parcel,android.os.Parcel,int):boolean
+GhostLocModule: service current com.android.server.location.provider.LocationProviderManager#getCurrentLocation(android.location.LocationRequest,android.location.util.identity.CallerIdentity,int,android.location.ILocationCallback):android.os.ICancellationSignal
+GhostLocModule: service current com.android.server.location.LocationManagerService#getCurrentLocation(java.lang.String,android.location.LocationRequest,android.location.ILocationCallback,java.lang.String,java.lang.String,java.lang.String):android.os.ICancellationSignal
+GhostLocProbe: public_last_location=35.689500,139.691700 mock=false provider=gps
+GhostLocProbe: public_current_location=35.689500,139.691700 mock=false
+GhostLocProbe: public_listener_location=35.689500,139.691700 mock=false provider=gps
+GhostLocProbe: binder_service=android.location.ILocationManager$Stub$Proxy
+GhostLocProbe: location=35.689500,139.691700 speed=3.05 alt=80.0 acc=25.0 mock=false provider=gps
+```
+
+Remaining Phase 1 limits found:
+
+- direct app-side reflection invocation of hidden
+  `ILocationManager#getLastLocation` is blocked by Android 15 hidden API method
+  filtering and currently logs `binder_reflection_error=NoSuchMethodException`
+- the service/binder path itself is verified through system_server
+  `ILocationManager$Stub#onTransact`, `LocationManagerService`, and
+  `LocationProviderManager` hook-hit logs
+- a separate third-party demo app and disable/restore behavior check are still
+  useful follow-up acceptance tests
+
 ## Current Build Artifacts
 
 ```text
@@ -209,15 +293,16 @@ D:\.develop\ghostloc-offline\probe-app\build\outputs\apk\debug\probe-app-debug.a
 ## Current Known Limits
 
 The current module is verified against public Android API surfaces and the owned
-probe app. It is not yet a complete original-equivalent module because the deeper
-private service layer still needs per-ROM implementation and verification.
+probe app. It now has OnePlus7 / Android 15 service-layer hooks, but it is not
+yet a complete original-equivalent module because broader private and vendor
+surfaces still need per-ROM implementation and verification.
 
 Known gaps:
 
-- private `system_server` `LocationManagerService` / binder-path hooks
+- app-side direct hidden `ILocationManager` reflection is filtered on Android 15
+- broader third-party app service-path compatibility checks
 - vendor fused-location implementations
 - structured non-empty `CellInfo` synthesis
 - GNSS, NMEA, AGPS, and satellite status synthesis
 - route-management UI equivalent to a polished product
 - broader Android/ROM compatibility matrix
-

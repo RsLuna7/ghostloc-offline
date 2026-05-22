@@ -5,7 +5,7 @@ offline MVP toward a more complete original-equivalent feature set.
 
 ## Current Completion
 
-Approximate completion: 60-70% of the visible/core feature surface.
+Approximate completion: 70-75% of the visible/core feature surface.
 
 Completed:
 
@@ -19,11 +19,12 @@ Completed:
 - Geocoder spoofing
 - Wi-Fi cleanup
 - basic telephony cleanup
+- Android 15 OnePlus7 `system_server` location service hooks
 - owned probe app and real-device verification
 
 Not complete:
 
-- deep `system_server` private service hooks
+- broader third-party app service-path compatibility checks
 - vendor fused-location hooks
 - non-empty structured cell identity synthesis
 - GNSS/NMEA/satellite state
@@ -34,28 +35,46 @@ Not complete:
 
 Goal: move from app-level public API hooks into the `system_server` service path.
 
+Status: implemented and verified on OnePlus7 / GM1901 / Android SDK 35 for the
+owned probe path. Residual Phase 1 acceptance gaps are listed below.
+
 Work items:
 
-- inspect actual Android 15 method signatures on the OnePlus7 ROM
-- hook `LocationManagerService`
-- hook `android.location.ILocationManager$Stub`
-- cover binder/service paths:
+- inspect actual Android 15 method signatures on the OnePlus7 ROM - done
+- hook `LocationManagerService` - done
+- hook `android.location.ILocationManager$Stub` - done through `onTransact`
+- cover binder/service paths - partially done:
   - `getLastLocation`
-  - `requestLocationUpdates`
-  - `getCurrentLocation`
+  - `requestLocationUpdates` / public API listener path dispatch
+  - `getCurrentLocation` verified through `LocationManagerService` and
+    `LocationProviderManager`
   - `registerLocationListener`
   - `removeUpdates`
   - `reportLocation`
-- add reflection-based method discovery logs for target classes
-- add defensive method-signature matching so unsupported ROMs fail closed
-- extend `probe-app` to distinguish public API path from service/binder path
+- add reflection-based method discovery logs for target classes - done
+- add defensive method-signature matching so unsupported ROMs fail closed - done
+- extend `probe-app` to distinguish public API path from service/binder path -
+  done for public path labels and binder-service object discovery
 
 Acceptance criteria:
 
-- owned probe still passes
-- a second ordinary location demo app receives spoofed coordinates
-- no LSPosed exception stacks
-- disabling the module restores real location behavior
+- owned probe still passes - done
+- a second ordinary location demo app receives spoofed coordinates - still open
+- no LSPosed exception stacks - done for captured GhostLoc logs
+- disabling the module restores real location behavior - still open
+
+Phase 1 residual gaps:
+
+- Android 15 hidden API filtering blocks direct app-side reflective invocation of
+  hidden `ILocationManager#getLastLocation`; the probe logs
+  `binder_service=android.location.ILocationManager$Stub$Proxy` followed by
+  `binder_reflection_error=NoSuchMethodException`
+- service-path verification currently relies on system_server logs showing
+  `ILocationManager$Stub#onTransact`, `LocationManagerService#getCurrentLocation`,
+  and `LocationProviderManager#getCurrentLocation` hook hits
+- add or use a second ordinary demo app before considering Phase 1 fully closed
+- run a disable-module restore-real-location check before considering Phase 1
+  fully closed
 
 ## Phase 2 - Fused and Vendor Location Adaptation
 
@@ -218,4 +237,3 @@ Reasoning:
 - Phase 2 needs per-ROM discovery and should be added after the core path is
   stable.
 - Phase 5 is best done after the behavior surface stops moving.
-

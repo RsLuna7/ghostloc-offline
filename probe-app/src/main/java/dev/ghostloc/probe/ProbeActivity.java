@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationListener;
 import android.location.LocationManager;
 import android.location.Criteria;
 import android.location.Geocoder;
@@ -12,11 +13,14 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.CancellationSignal;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.widget.TextView;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executors;
@@ -83,18 +87,174 @@ public final class ProbeActivity extends Activity {
                     location.getAccuracy(),
                     isMock(location),
                     location.getProvider()));
+            Log.i(TAG, String.format(Locale.US,
+                    "public_last_location=%.6f,%.6f mock=%s provider=%s",
+                    location.getLatitude(),
+                    location.getLongitude(),
+                    isMock(location),
+                    location.getProvider()));
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 manager.getCurrentLocation(LocationManager.GPS_PROVIDER, new CancellationSignal(),
                         Executors.newSingleThreadExecutor(),
                         current -> Log.i(TAG, String.format(Locale.US,
-                                "current_location=%.6f,%.6f mock=%s",
+                                "public_current_location=%.6f,%.6f mock=%s",
                                 current == null ? 0.0 : current.getLatitude(),
                                 current == null ? 0.0 : current.getLongitude(),
                                 current != null && isMock(current))));
             }
+            LocationListener listener = new LocationListener() {
+                @Override
+                public void onLocationChanged(Location value) {
+                    Log.i(TAG, String.format(Locale.US,
+                            "public_listener_location=%.6f,%.6f mock=%s provider=%s",
+                            value.getLatitude(),
+                            value.getLongitude(),
+                            isMock(value),
+                            value.getProvider()));
+                    try {
+                        manager.removeUpdates(this);
+                    } catch (Throwable throwable) {
+                        Log.i(TAG, "public_listener_remove_error=" + throwable.getClass().getSimpleName());
+                    }
+                }
+            };
+            manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, listener);
+            probeBinderReflection(manager);
         } catch (Throwable throwable) {
             report.append("location_error=").append(throwable.getClass().getSimpleName()).append("\n");
         }
+    }
+
+    private void probeBinderReflection(LocationManager manager) {
+        try {
+            Object service = serviceFromServiceManager();
+            if (service == null) {
+                service = serviceFromLocationManager(manager);
+            }
+            Log.i(TAG, "binder_service=" + (service == null ? "null" : service.getClass().getName()));
+            if (service == null) {
+                return;
+            }
+            Location location = invokeBinderGetLastLocation(service);
+            Log.i(TAG, String.format(Locale.US,
+                    "binder_last_location=%.6f,%.6f mock=%s provider=%s",
+                    location == null ? 0.0 : location.getLatitude(),
+                    location == null ? 0.0 : location.getLongitude(),
+                    location != null && isMock(location),
+                    location == null ? "null" : location.getProvider()));
+        } catch (Throwable throwable) {
+            Log.i(TAG, "binder_reflection_error=" + throwable.getClass().getSimpleName());
+        }
+    }
+
+    private Location invokeBinderGetLastLocation(Object service) throws Exception {
+        Location location = invokeBinderGetLastLocation(service, service.getClass().getMethods());
+        if (location != null) {
+            return location;
+        }
+        Class<?> managerInterface = Class.forName("android.location.ILocationManager");
+        location = invokeBinderGetLastLocation(service, managerInterface.getMethods());
+        if (location != null) {
+            return location;
+        }
+        throw new NoSuchMethodException("getLastLocation");
+    }
+
+    private Location invokeBinderGetLastLocation(Object service, Method[] methods) throws Exception {
+        for (Method method : methods) {
+            if (!"getLastLocation".equals(method.getName())) {
+                continue;
+            }
+            Log.i(TAG, "binder_getLast_method=" + method);
+            Object[] args = argsForBinderGetLast(method.getParameterTypes());
+            method.setAccessible(true);
+            Object result = method.invoke(service, args);
+            if (result instanceof Location) {
+                return (Location) result;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    private Object[] argsForBinderGetLast(Class<?>[] types) throws Exception {
+        Object[] args = new Object[types.length];
+        boolean providerStringUsed = false;
+        boolean packageStringUsed = false;
+        for (int i = 0; i < types.length; i++) {
+            Class<?> type = types[i];
+            String name = type.getName();
+            if (type == String.class) {
+                if (!providerStringUsed) {
+                    args[i] = LocationManager.GPS_PROVIDER;
+                    providerStringUsed = true;
+                } else if (!packageStringUsed) {
+                    args[i] = getPackageName();
+                    packageStringUsed = true;
+                } else {
+                    args[i] = null;
+                }
+            } else if ("android.location.LastLocationRequest".equals(name)) {
+                args[i] = newLastLocationRequest();
+            } else if (type == int.class || type == Integer.class) {
+                args[i] = 0;
+            } else if (type == boolean.class || type == Boolean.class) {
+                args[i] = false;
+            } else if (type == long.class || type == Long.class) {
+                args[i] = 0L;
+            } else {
+                args[i] = null;
+            }
+        }
+        return args;
+    }
+
+    private Object newLastLocationRequest() throws Exception {
+        Class<?> builderClass = Class.forName("android.location.LastLocationRequest$Builder");
+        Object builder = builderClass.getConstructor().newInstance();
+        return builderClass.getMethod("build").invoke(builder);
+    }
+
+    private Object serviceFromServiceManager() {
+        try {
+            Class<?> serviceManagerClass = Class.forName("android.os.ServiceManager");
+            Method getService = serviceManagerClass.getDeclaredMethod("getService", String.class);
+            getService.setAccessible(true);
+            Object binder = getService.invoke(null, Context.LOCATION_SERVICE);
+            if (!(binder instanceof IBinder)) {
+                return null;
+            }
+            Class<?> stubClass = Class.forName("android.location.ILocationManager$Stub");
+            Method asInterface = stubClass.getDeclaredMethod("asInterface", IBinder.class);
+            asInterface.setAccessible(true);
+            return asInterface.invoke(null, binder);
+        } catch (Throwable throwable) {
+            Log.i(TAG, "binder_servicemanager_error=" + throwable.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private Object serviceFromLocationManager(LocationManager manager) {
+        Class<?> cls = manager.getClass();
+        while (cls != null) {
+            try {
+                for (Field field : cls.getDeclaredFields()) {
+                    try {
+                        field.setAccessible(true);
+                        Object value = field.get(manager);
+                        if (value != null && value.getClass().getName().contains("ILocationManager")) {
+                            Log.i(TAG, "binder_service_field=" + cls.getName() + "." + field.getName());
+                            return value;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            } catch (Throwable throwable) {
+                Log.i(TAG, "binder_field_scan_error=" + throwable.getClass().getSimpleName());
+            }
+            cls = cls.getSuperclass();
+        }
+        return null;
     }
 
     private void probeGeocoder(StringBuilder report) {
