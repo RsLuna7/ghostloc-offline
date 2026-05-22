@@ -5,7 +5,7 @@ offline MVP toward a more complete original-equivalent feature set.
 
 ## Current Completion
 
-Approximate completion: 85-90% of the visible/core feature surface.
+Approximate completion: 94-97% of the visible/core feature surface.
 
 Completed:
 
@@ -23,13 +23,13 @@ Completed:
 - structured LTE/NR `CellInfo` synthesis
 - GNSS status and NMEA callback synthesis
 - public `fused` provider spoof verification
+- product control surface for routes, favorites, diagnostics, and probe status
 - owned probe app and real-device verification
 
 Not complete:
 
 - broader third-party app service-path compatibility checks
 - vendor fused-location hooks
-- polished route UI and product controls
 - broad compatibility testing
 
 ## Phase 1 - Deep Location Service Hooks
@@ -200,7 +200,7 @@ Work items:
   - `$GPGSA`
   - `$GPGSV`
 - derive NMEA latitude/longitude/time/speed/course from current spoof state - done
-- add UI controls - backend storage keys added, app UI still open:
+- add UI controls - done:
   - satellite count
   - NMEA enable
   - AGPS enable
@@ -217,12 +217,13 @@ Phase 4 residual gaps:
 
 - `LocationManager.getGpsStatus(null)` still returns `null` on the current ROM,
   even though the GNSS callback and NMEA paths are spoofed
-- the `gnss_sat_count` / `nmea_enabled` / `agps_enabled` settings are stored but
-  not yet exposed as polished UI controls
 
 ## Phase 5 - Product Completeness
 
 Goal: close the user-facing gap between a technical MVP and a complete module.
+
+Status: implemented and verified on OnePlus7 / GM1901 / Android SDK 35 for the
+owned route/probe path, including post-reboot persistence.
 
 Work items:
 
@@ -257,19 +258,39 @@ Work items:
 
 Acceptance criteria:
 
-- no adb required for normal use
-- user can diagnose missing scope/module issues in app
-- probe all-green result is visible from the app
-- settings survive reboot and app restart
+- no adb required for normal use - done
+- user can diagnose missing scope/module issues in app - done
+- probe all-green result is visible from the app - done
+- settings survive reboot and app restart - done on the owned device path
 
-## Recommended Execution Order
+Phase 5 implementation notes:
 
-1. Phase 2: capture dedicated fused-process evidence on another ROM or trigger
-   path, then leave vendor placeholders defensive
-2. Phase 5: product completeness
+- `MainActivity` now exposes:
+  - route JSON editing and current-point append
+  - loop / pause / resume / auto-bearing controls
+  - named/grouped favorites JSON import/export
+  - GNSS, NR, vendor-hook, and jitter controls
+  - LSPosed/module/probe diagnostics
+- `GhostLocModule` now applies:
+  - multi-point route interpolation
+  - loop handling
+  - speed variation
+  - altitude/accuracy jitter
+  - recent hook hit/error diagnostics
+- `probe-app` now broadcasts its final report and pass/fail verdict back to the
+  main app, which persists and displays the last probe result
+
+## Remaining Validation Order
+
+1. Phase 1 residual: validate against a second ordinary location demo app
+2. Phase 1 residual: validate disable-module restores real location
+3. Phase 2 residual: capture dedicated fused-process evidence on another ROM or
+   trigger path
+4. Compatibility follow-up: broaden the device / ROM / third-party app matrix
 
 Reasoning:
 
-- Phases 1, 3, and 4 are already in place on the owned Android 15 path.
-- Phase 2 is narrowed but not fully closed.
-- Phase 5 should follow once the provider/process surface is stable.
+- Core implementation phases 1, 3, 4, and 5 are now in place on the owned
+  Android 15 path.
+- The remaining work is mostly validation depth and vendor/ROM surface capture,
+  not missing core product behavior.

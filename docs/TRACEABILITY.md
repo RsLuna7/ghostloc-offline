@@ -505,6 +505,88 @@ Phase 2 notes:
 - non-present `com.oplus.location` and `com.xiaomi.location.fused` paths stay
   defensive and skipped
 
+### Phase 5 - Add product control surface and probe diagnostics
+
+Purpose:
+
+- close the remaining user-facing gap with route control, diagnostics, and
+  in-app probe visibility
+- keep all previously verified hook paths intact while extending only the
+  control plane
+
+Main files:
+
+```text
+app/src/main/java/dev/ghostloc/offline/MainActivity.java
+app/src/main/java/dev/ghostloc/offline/GhostLocModule.java
+app/src/main/java/dev/ghostloc/offline/ProbeReportReceiver.java
+app/src/main/java/dev/ghostloc/offline/SettingsStore.java
+app/src/main/AndroidManifest.xml
+probe-app/src/main/java/dev/ghostloc/probe/ProbeActivity.java
+docs/DEVICE_TEST_REPORT.md
+docs/REPLICATION_PLAN.md
+```
+
+Implemented:
+
+- rebuilt `MainActivity` into a sectioned operator surface for:
+  - coordinates and spoof basics
+  - Wi-Fi / cell / mock / vendor hook policy toggles
+  - radio and GNSS tuning
+  - multi-point route JSON editing
+  - named/grouped favorites JSON editing
+  - diagnostics and reset controls
+- route controls:
+  - multi-point route storage in `route_points`
+  - loop mode
+  - pause/resume
+  - auto-bearing
+  - speed variation
+- favorites controls:
+  - `name` / `group` / `lat` / `lon` JSON model
+  - legacy semicolon format migration on read
+  - JSON import/export through the app surface
+- module-side route execution:
+  - polyline interpolation
+  - route distance accumulation
+  - loop wrapping
+  - speed variation
+  - altitude and accuracy jitter
+- diagnostics buffers:
+  - `diag_recent_hits`
+  - `diag_recent_errors`
+  - `diag_last_process`
+- in-app probe result visibility:
+  - `probe-app` now broadcasts its final report and pass/fail verdict
+  - `ProbeReportReceiver` stores `last_probe_report` / `last_probe_ok` /
+    `last_probe_at`
+  - `MainActivity` renders the last probe verdict and report in diagnostics
+- owned automation helper:
+  - `MainActivity` accepts base64 route/favorites extras for non-interactive
+    device validation without changing the normal manual flow
+
+Real-device evidence:
+
+```text
+GhostLocApp: service bound framework=LSPosed api=100
+GhostLocApp: bridge command=start handled=true
+GhostLocProbe: public_last_location=35.689540,139.691766 mock=false provider=gps
+GhostLocProbe: location=35.689540,139.691766 speed=3.13 alt=82.9 acc=25.5 mock=false provider=gps
+GhostLocProbe: probe_status=PASS
+GhostLocApp: probe report stored ok=true
+```
+
+Phase 5 notes:
+
+- the spoof output drifted from the base coordinate `35.689500,139.691700` to
+  `35.689540,139.691766`, confirming that route movement stayed active
+- speed, altitude, and accuracy moved away from their base values
+  (`3.05 / 80.0 / 25.0`) to `3.13 / 82.9 / 25.5`, confirming the new variation
+  and jitter controls were live in the hook path
+- after a full device reboot, the owned probe still reported the Tokyo/Japan
+  profile and the app stored a fresh `last_probe_report`, confirming reboot
+  persistence on the current device path
+
 ## Current Build Artifacts
 
 ```text
@@ -526,5 +608,4 @@ Known gaps:
 - dedicated fused-process hook-hit evidence is still missing on the current ROM
 - legacy `LocationManager.getGpsStatus(null)` snapshot still returns `null` on
   the current ROM even though the GNSS/NMEA callback paths are spoofed
-- route-management UI equivalent to a polished product
 - broader Android/ROM compatibility matrix

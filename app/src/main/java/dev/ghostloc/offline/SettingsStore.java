@@ -24,6 +24,20 @@ final class SettingsStore {
     static final String MOVEMENT = "movement";
     static final String STARTED_AT = "started_at";
     static final String FAVORITES = "favorites";
+    static final String ROUTE_POINTS = "route_points";
+    static final String ROUTE_LOOP = "route_loop";
+    static final String ROUTE_AUTO_BEARING = "route_auto_bearing";
+    static final String ROUTE_PAUSED = "route_paused";
+    static final String ROUTE_PAUSE_ELAPSED_MS = "route_pause_elapsed_ms";
+    static final String ROUTE_SPEED_VARIATION = "route_speed_variation";
+    static final String ACCURACY_JITTER = "accuracy_jitter";
+    static final String ALTITUDE_JITTER = "altitude_jitter";
+    static final String DIAG_RECENT_HITS = "diag_recent_hits";
+    static final String DIAG_RECENT_ERRORS = "diag_recent_errors";
+    static final String DIAG_LAST_PROCESS = "diag_last_process";
+    static final String LAST_PROBE_REPORT = "last_probe_report";
+    static final String LAST_PROBE_OK = "last_probe_ok";
+    static final String LAST_PROBE_AT = "last_probe_at";
     static final String LAST_STATUS = "last_status";
 
     static final double DEFAULT_LAT = 39.9042;
@@ -33,6 +47,9 @@ final class SettingsStore {
     static final float DEFAULT_ACCURACY = 25.0f;
     static final float DEFAULT_BEARING = 0.0f;
     static final int DEFAULT_GNSS_SAT_COUNT = 12;
+    static final float DEFAULT_ROUTE_SPEED_VARIATION = 0.15f;
+    static final float DEFAULT_ACCURACY_JITTER = 2.5f;
+    static final float DEFAULT_ALTITUDE_JITTER = 3.0f;
 
     private SettingsStore() {
     }

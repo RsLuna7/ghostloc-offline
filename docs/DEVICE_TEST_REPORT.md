@@ -260,6 +260,67 @@ Result:
 - `com.oplus.location` and `com.xiaomi.location.fused` are not installed on the
   current device.
 
+### Phase 5 Product Completeness
+
+Base coordinate and route seed:
+
+```text
+base point: 35.689500,139.691700
+route points:
+- 35.689500,139.691700
+- 35.690300,139.693000
+- 35.691100,139.694200
+favorites:
+- Tokyo Base / jp
+- Tokyo Alt / jp
+```
+
+For owned automation, `MainActivity` was launched with base64-encoded route and
+favorites extras, movement enabled, loop enabled, auto-bearing enabled, and
+speed variation set to `0.20`. The probe was then run twice: once immediately,
+and once again after a full device reboot without reapplying settings.
+
+Runtime evidence before reboot:
+
+```text
+GhostLocApp: service bound framework=LSPosed api=100
+GhostLocApp: bridge command=start handled=true
+GhostLocProbe: public_last_location=35.689540,139.691766 mock=false provider=gps
+GhostLocProbe: location=35.689540,139.691766 speed=3.13 alt=82.9 acc=25.5 mock=false provider=gps
+GhostLocProbe: nmea=$GPGGA,040135.00,3541.3725,N,13941.5061,E,1,12,0.9,82.9,M,0.0,M,,*6A
+GhostLocProbe: probe_status=PASS
+GhostLocApp: probe report stored ok=true
+```
+
+Persistence evidence after reboot, without reapplying settings:
+
+```text
+GhostLocProbe: public_last_location=35.689819,139.692218 mock=false provider=gps
+GhostLocProbe: location=35.689819,139.692218 speed=3.07 alt=77.7 acc=23.0 mock=false provider=gps
+GhostLocProbe: network_type=20 data_type=20 voice_type=13 phone_type=1 operator=44010 operator_name=NTT DOCOMO country=jp roaming=false service_numeric=44010 service_alpha=NTT DOCOMO cells=2
+GhostLocProbe: probe_status=PASS
+GhostLocApp: probe report stored ok=true
+```
+
+Stored app-side probe report:
+
+```xml
+<boolean name="last_probe_ok" value="true" />
+<string name="last_probe_report">providers=[gps, network, passive, fused] ...</string>
+```
+
+Result:
+
+- the new route path remained active in the hook output:
+  - the observed coordinate moved away from the base point
+  - `provider=gps` and `provider=fused` stayed consistent
+- speed/altitude/accuracy moved off their base values, confirming live
+  speed-variation and jitter application in the hook layer
+- probe pass/fail now returns into the main app through
+  `ProbeReportReceiver`, and the app persists the last probe verdict/report
+- route/favorites settings and the Tokyo/Japan profile survived a full device
+  reboot on the OnePlus7 path
+
 ### Module Load
 
 ```text
@@ -306,6 +367,7 @@ Pass for the currently implemented public API surfaces:
 - `requestCellInfoUpdate()` synthetic callback path is active.
 - `GnssStatus.Callback` and NMEA synthetic callback paths are active.
 - Public `fused` provider coordinate reads are active.
+- Phase 5 route controls, diagnostics, and in-app probe reporting are active.
 - Provider status and Geocoder are spoofed.
 - Command bridge is observed without LSPosed error stacks after the read-only
   remote preferences fix.

@@ -29,6 +29,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".ProbeReportReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.ghostloc.offline.action.PROBE_REPORT" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
-

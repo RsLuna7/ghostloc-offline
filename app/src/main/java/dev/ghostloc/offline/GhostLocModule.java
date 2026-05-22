@@ -33,6 +33,9 @@ import android.telephony.TelephonyManager;
 import android.util.ArraySet;
 import android.util.Log;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -62,6 +65,7 @@ public final class GhostLocModule extends XposedModule {
                     "com.oplus.location",
                     "com.xiaomi.location.fused"
             )));
+    private static final int DIAGNOSTIC_LIMIT = 12;
     private static final Set<String> INSTALLED_DEEP_HOOKS = Collections.synchronizedSet(new HashSet<>());
     private static final Set<String> LOGGED_HITS = Collections.synchronizedSet(new HashSet<>());
     private static volatile XposedInterface bridge;
@@ -71,6 +75,7 @@ public final class GhostLocModule extends XposedModule {
         super(base, param);
         bridge = base;
         prefs = base.getRemotePreferences(SettingsStore.GROUP);
+        recordProcess(param.getProcessName());
         log("loaded process=" + param.getProcessName());
     }
 
@@ -820,26 +825,14 @@ public final class GhostLocModule extends XposedModule {
 
     private static Location makeLocation(String provider) {
         SharedPreferences p = prefs();
-        Location location = new Location(provider == null ? LocationManager.GPS_PROVIDER : provider);
-        double lat = Double.longBitsToDouble(p.getLong(SettingsStore.LAT,
-                Double.doubleToRawLongBits(SettingsStore.DEFAULT_LAT)));
-        double lon = Double.longBitsToDouble(p.getLong(SettingsStore.LON,
-                Double.doubleToRawLongBits(SettingsStore.DEFAULT_LON)));
-        float speed = p.getFloat(SettingsStore.SPEED, SettingsStore.DEFAULT_SPEED);
-        float bearing = p.getFloat(SettingsStore.BEARING, SettingsStore.DEFAULT_BEARING);
-        if (p.getBoolean(SettingsStore.MOVEMENT, false)) {
-            double[] moved = move(lat, lon, speed, bearing,
-                    Math.max(0L, System.currentTimeMillis() - p.getLong(SettingsStore.STARTED_AT, 0L)) / 1000.0);
-            lat = moved[0];
-            lon = moved[1];
-        }
-        location.setLatitude(lat);
-        location.setLongitude(lon);
-        location.setSpeed(speed);
-        location.setAltitude(Double.longBitsToDouble(p.getLong(SettingsStore.ALTITUDE,
-                Double.doubleToRawLongBits(SettingsStore.DEFAULT_ALTITUDE))));
-        location.setAccuracy(p.getFloat(SettingsStore.ACCURACY, SettingsStore.DEFAULT_ACCURACY));
-        location.setBearing(bearing);
+        LocationState state = currentLocationState(provider == null ? LocationManager.GPS_PROVIDER : provider, p);
+        Location location = new Location(state.provider);
+        location.setLatitude(state.latitude);
+        location.setLongitude(state.longitude);
+        location.setSpeed(state.speed);
+        location.setAltitude(state.altitude);
+        location.setAccuracy(state.accuracy);
+        location.setBearing(state.bearing);
         location.setTime(System.currentTimeMillis());
         location.setElapsedRealtimeNanos(android.os.SystemClock.elapsedRealtimeNanos());
         if (android.os.Build.VERSION.SDK_INT >= 26) {
@@ -848,6 +841,54 @@ public final class GhostLocModule extends XposedModule {
             location.setBearingAccuracyDegrees(1.0f);
         }
         return location;
+    }
+
+    private static LocationState currentLocationState(String provider, SharedPreferences preferences) {
+        double lat = Double.longBitsToDouble(preferences.getLong(SettingsStore.LAT,
+                Double.doubleToRawLongBits(SettingsStore.DEFAULT_LAT)));
+        double lon = Double.longBitsToDouble(preferences.getLong(SettingsStore.LON,
+                Double.doubleToRawLongBits(SettingsStore.DEFAULT_LON)));
+        float baseSpeed = preferences.getFloat(SettingsStore.SPEED, SettingsStore.DEFAULT_SPEED);
+        float baseBearing = preferences.getFloat(SettingsStore.BEARING, SettingsStore.DEFAULT_BEARING);
+        double baseAltitude = Double.longBitsToDouble(preferences.getLong(SettingsStore.ALTITUDE,
+                Double.doubleToRawLongBits(SettingsStore.DEFAULT_ALTITUDE)));
+        float baseAccuracy = preferences.getFloat(SettingsStore.ACCURACY, SettingsStore.DEFAULT_ACCURACY);
+        double elapsedSeconds = routeElapsedSeconds(preferences);
+        float speedVariation = preferences.getFloat(SettingsStore.ROUTE_SPEED_VARIATION,
+                SettingsStore.DEFAULT_ROUTE_SPEED_VARIATION);
+        float effectiveSpeed = variedSpeed(baseSpeed, speedVariation, elapsedSeconds);
+        if (preferences.getBoolean(SettingsStore.MOVEMENT, false)) {
+            List<RoutePoint> route = parseRoutePoints(preferences.getString(SettingsStore.ROUTE_POINTS, ""));
+            if (route.size() >= 2) {
+                LocationState routeState = routeLocationState(
+                        provider,
+                        preferences,
+                        route,
+                        elapsedSeconds,
+                        baseSpeed,
+                        speedVariation,
+                        preferences.getBoolean(SettingsStore.ROUTE_LOOP, false),
+                        preferences.getBoolean(SettingsStore.ROUTE_AUTO_BEARING, true),
+                        baseBearing,
+                        baseAltitude,
+                        baseAccuracy);
+                if (routeState != null) {
+                    return routeState;
+                }
+            }
+            double[] moved = moveDistance(lat, lon, baseBearing,
+                    integratedDistanceMeters(baseSpeed, speedVariation, elapsedSeconds));
+            lat = moved[0];
+            lon = moved[1];
+        }
+        return new LocationState(
+                provider,
+                lat,
+                lon,
+                effectiveSpeed,
+                applyAltitudeJitter(preferences, baseAltitude, elapsedSeconds),
+                applyAccuracyJitter(preferences, baseAccuracy, elapsedSeconds),
+                baseBearing);
     }
 
     private static void handleBridgeCommand(String command, Bundle bundle) {
@@ -1761,6 +1802,11 @@ public final class GhostLocModule extends XposedModule {
 
     private static double[] move(double lat, double lon, float speedMps, float bearingDeg, double seconds) {
         double distance = Math.max(0.0, speedMps) * seconds;
+        return moveDistance(lat, lon, bearingDeg, distance);
+    }
+
+    private static double[] moveDistance(double lat, double lon, float bearingDeg, double distanceMeters) {
+        double distance = Math.max(0.0, distanceMeters);
         double radius = 6371000.0;
         double angular = distance / radius;
         double bearing = Math.toRadians(bearingDeg);
@@ -1775,6 +1821,151 @@ public final class GhostLocModule extends XposedModule {
                 Math.sin(bearing) * sinAngular * cosLat1,
                 cosAngular - sinLat1 * Math.sin(lat2));
         return new double[]{Math.toDegrees(lat2), normalizeLon(Math.toDegrees(lon2))};
+    }
+
+    private static LocationState routeLocationState(
+            String provider,
+            SharedPreferences preferences,
+            List<RoutePoint> route,
+            double elapsedSeconds,
+            float baseSpeed,
+            float speedVariation,
+            boolean loop,
+            boolean autoBearing,
+            float fallbackBearing,
+            double baseAltitude,
+            float baseAccuracy
+    ) {
+        double totalDistance = 0.0;
+        for (int i = 0; i < route.size() - 1; i++) {
+            totalDistance += distanceMeters(route.get(i), route.get(i + 1));
+        }
+        if (totalDistance <= 0.5) {
+            RoutePoint point = route.get(0);
+            return new LocationState(
+                    provider,
+                    point.latitude,
+                    point.longitude,
+                    variedSpeed(baseSpeed, speedVariation, elapsedSeconds),
+                    applyAltitudeJitter(preferences, baseAltitude, elapsedSeconds),
+                    applyAccuracyJitter(preferences, baseAccuracy, elapsedSeconds),
+                    fallbackBearing);
+        }
+        double traveled = integratedDistanceMeters(baseSpeed, speedVariation, elapsedSeconds);
+        if (loop) {
+            traveled %= totalDistance;
+        } else {
+            traveled = Math.min(traveled, totalDistance);
+        }
+        for (int i = 0; i < route.size() - 1; i++) {
+            RoutePoint start = route.get(i);
+            RoutePoint end = route.get(i + 1);
+            double segmentDistance = distanceMeters(start, end);
+            if (i == route.size() - 2 || traveled <= segmentDistance) {
+                double fraction = segmentDistance <= 0.0 ? 0.0 : Math.max(0.0, Math.min(1.0, traveled / segmentDistance));
+                double lat = interpolate(start.latitude, end.latitude, fraction);
+                double lon = interpolateLongitude(start.longitude, end.longitude, fraction);
+                float bearing = autoBearing ? bearingBetween(start, end) : fallbackBearing;
+                return new LocationState(
+                        provider,
+                        lat,
+                        lon,
+                        variedSpeed(baseSpeed, speedVariation, elapsedSeconds),
+                        applyAltitudeJitter(preferences, baseAltitude, elapsedSeconds),
+                        applyAccuracyJitter(preferences, baseAccuracy, elapsedSeconds),
+                        bearing);
+            }
+            traveled -= segmentDistance;
+        }
+        RoutePoint end = route.get(route.size() - 1);
+        return new LocationState(
+                provider,
+                end.latitude,
+                end.longitude,
+                variedSpeed(baseSpeed, speedVariation, elapsedSeconds),
+                applyAltitudeJitter(preferences, baseAltitude, elapsedSeconds),
+                applyAccuracyJitter(preferences, baseAccuracy, elapsedSeconds),
+                fallbackBearing);
+    }
+
+    private static List<RoutePoint> parseRoutePoints(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Collections.emptyList();
+        }
+        ArrayList<RoutePoint> points = new ArrayList<>();
+        try {
+            JSONArray array = new JSONArray(raw);
+            for (int i = 0; i < array.length(); i++) {
+                Object value = array.get(i);
+                if (value instanceof JSONObject object) {
+                    if (object.has("lat") && object.has("lon")) {
+                        points.add(new RoutePoint(object.optDouble("lat"), object.optDouble("lon")));
+                    }
+                } else if (value instanceof JSONArray pair && pair.length() >= 2) {
+                    points.add(new RoutePoint(pair.optDouble(0), pair.optDouble(1)));
+                }
+            }
+        } catch (Throwable ignored) {
+            return Collections.emptyList();
+        }
+        return points;
+    }
+
+    private static double routeElapsedSeconds(SharedPreferences preferences) {
+        long elapsedMs = preferences.getBoolean(SettingsStore.ROUTE_PAUSED, false)
+                ? preferences.getLong(SettingsStore.ROUTE_PAUSE_ELAPSED_MS, 0L)
+                : Math.max(0L, System.currentTimeMillis() - preferences.getLong(SettingsStore.STARTED_AT, 0L));
+        return elapsedMs / 1000.0;
+    }
+
+    private static float variedSpeed(float baseSpeed, float variation, double elapsedSeconds) {
+        float clamped = Math.max(0.0f, Math.min(0.75f, variation));
+        double multiplier = 1.0 + clamped * Math.sin(elapsedSeconds / 18.0);
+        return (float) Math.max(0.0, baseSpeed * multiplier);
+    }
+
+    private static double integratedDistanceMeters(float baseSpeed, float variation, double elapsedSeconds) {
+        float clamped = Math.max(0.0f, Math.min(0.75f, variation));
+        return Math.max(0.0,
+                (baseSpeed * elapsedSeconds)
+                        + (baseSpeed * clamped * 18.0 * (1.0 - Math.cos(elapsedSeconds / 18.0))));
+    }
+
+    private static float applyAccuracyJitter(SharedPreferences preferences, float baseAccuracy, double elapsedSeconds) {
+        float jitter = preferences.getFloat(SettingsStore.ACCURACY_JITTER, SettingsStore.DEFAULT_ACCURACY_JITTER);
+        if (jitter <= 0.0f) {
+            return baseAccuracy;
+        }
+        return Math.max(1.0f, (float) (baseAccuracy + Math.sin(elapsedSeconds / 11.0) * jitter));
+    }
+
+    private static double applyAltitudeJitter(SharedPreferences preferences, double baseAltitude, double elapsedSeconds) {
+        float jitter = preferences.getFloat(SettingsStore.ALTITUDE_JITTER, SettingsStore.DEFAULT_ALTITUDE_JITTER);
+        if (jitter <= 0.0f) {
+            return baseAltitude;
+        }
+        return baseAltitude + Math.cos(elapsedSeconds / 13.0) * jitter;
+    }
+
+    private static double distanceMeters(RoutePoint start, RoutePoint end) {
+        float[] result = new float[1];
+        Location.distanceBetween(start.latitude, start.longitude, end.latitude, end.longitude, result);
+        return result[0];
+    }
+
+    private static float bearingBetween(RoutePoint start, RoutePoint end) {
+        float[] result = new float[2];
+        Location.distanceBetween(start.latitude, start.longitude, end.latitude, end.longitude, result);
+        return result[1];
+    }
+
+    private static double interpolate(double start, double end, double fraction) {
+        return start + ((end - start) * fraction);
+    }
+
+    private static double interpolateLongitude(double start, double end, double fraction) {
+        double delta = normalizeLon(end - start);
+        return normalizeLon(start + (delta * fraction));
     }
 
     private static double normalizeLon(double lon) {
@@ -1884,6 +2075,44 @@ public final class GhostLocModule extends XposedModule {
             this.azimuthDegrees = azimuthDegrees;
             this.carrierFrequencyHz = carrierFrequencyHz;
             this.usedInFix = usedInFix;
+        }
+    }
+
+    private static final class RoutePoint {
+        final double latitude;
+        final double longitude;
+
+        RoutePoint(double latitude, double longitude) {
+            this.latitude = latitude;
+            this.longitude = longitude;
+        }
+    }
+
+    private static final class LocationState {
+        final String provider;
+        final double latitude;
+        final double longitude;
+        final float speed;
+        final double altitude;
+        final float accuracy;
+        final float bearing;
+
+        LocationState(
+                String provider,
+                double latitude,
+                double longitude,
+                float speed,
+                double altitude,
+                float accuracy,
+                float bearing
+        ) {
+            this.provider = provider;
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.speed = speed;
+            this.altitude = altitude;
+            this.accuracy = accuracy;
+            this.bearing = bearing;
         }
     }
 
@@ -2070,6 +2299,7 @@ public final class GhostLocModule extends XposedModule {
                 ? method.getDeclaringClass().getName() + "#" + methodSignature(method)
                 : String.valueOf(member));
         if (LOGGED_HITS.add(key)) {
+            recordHit(key);
             log(key);
         }
     }
@@ -2080,6 +2310,7 @@ public final class GhostLocModule extends XposedModule {
                 ? method.getDeclaringClass().getName() + "#" + methodSignature(method)
                 : String.valueOf(member));
         if (LOGGED_HITS.add(key)) {
+            recordHit(key);
             log(key);
         }
     }
@@ -2115,6 +2346,7 @@ public final class GhostLocModule extends XposedModule {
     }
 
     private static void log(String message, Throwable throwable) {
+        recordError(message + " " + throwable.getClass().getSimpleName());
         Log.i(TAG, message, throwable);
         XposedInterface current = bridge;
         if (current != null) {
@@ -2123,5 +2355,56 @@ public final class GhostLocModule extends XposedModule {
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    private static void recordProcess(String processName) {
+        try {
+            SharedPreferences current = prefs;
+            if (current == null) {
+                return;
+            }
+            current.edit()
+                    .putString(SettingsStore.DIAG_LAST_PROCESS, stamp(processName))
+                    .apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void recordHit(String message) {
+        appendDiagnostic(SettingsStore.DIAG_RECENT_HITS, message);
+    }
+
+    private static void recordError(String message) {
+        appendDiagnostic(SettingsStore.DIAG_RECENT_ERRORS, message);
+    }
+
+    private static void appendDiagnostic(String key, String message) {
+        try {
+            SharedPreferences current = prefs;
+            if (current == null) {
+                return;
+            }
+            String existing = current.getString(key, "");
+            current.edit()
+                    .putString(key, appendLimited(existing, stamp(message), DIAGNOSTIC_LIMIT))
+                    .apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String appendLimited(String existing, String entry, int maxLines) {
+        ArrayList<String> lines = new ArrayList<>();
+        if (existing != null && !existing.isBlank()) {
+            lines.addAll(Arrays.asList(existing.split("\\n")));
+        }
+        lines.add(entry);
+        while (lines.size() > maxLines) {
+            lines.remove(0);
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String stamp(String message) {
+        return String.format(Locale.US, "%1$tH:%1$tM:%1$tS %2$s", System.currentTimeMillis(), message);
     }
 }

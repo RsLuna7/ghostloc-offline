@@ -3,6 +3,7 @@ package dev.ghostloc.probe;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationListener;
@@ -77,7 +78,31 @@ public final class ProbeActivity extends Activity {
         probeTelephony(report);
         String value = report.toString();
         Log.i(TAG, value);
+        boolean ok = isGreenReport(value);
+        Log.i(TAG, "probe_status=" + (ok ? "PASS" : "FAIL"));
+        sendReportBroadcast(value, ok);
         output.setText(value);
+    }
+
+    private boolean isGreenReport(String report) {
+        return report != null
+                && report.contains("location=")
+                && report.contains("network_type=")
+                && !report.contains("location=null")
+                && !report.contains("_error=");
+    }
+
+    private void sendReportBroadcast(String report, boolean ok) {
+        try {
+            Intent intent = new Intent("dev.ghostloc.offline.action.PROBE_REPORT");
+            intent.setPackage("dev.ghostloc.offline");
+            intent.putExtra("probe_report", report);
+            intent.putExtra("probe_ok", ok);
+            intent.putExtra("probe_at", System.currentTimeMillis());
+            sendBroadcast(intent);
+        } catch (Throwable throwable) {
+            Log.i(TAG, "probe_broadcast_error=" + throwable.getClass().getSimpleName());
+        }
     }
 
     private void probeLocation(StringBuilder report) {
