@@ -22,6 +22,7 @@ Completed:
 - Android 15 OnePlus7 `system_server` location service hooks
 - structured LTE/NR `CellInfo` synthesis
 - GNSS status and NMEA callback synthesis
+- public `fused` provider spoof verification
 - owned probe app and real-device verification
 
 Not complete:
@@ -80,6 +81,10 @@ Phase 1 residual gaps:
 
 Goal: cover fused and vendor-specific location processes when present.
 
+Status: partially implemented on OnePlus7 / GM1901 / Android SDK 35. The public
+`fused` provider path is verified, but dedicated fused-process hook evidence is
+still open on this ROM.
+
 Target scopes:
 
 - `com.android.location.fused`
@@ -88,20 +93,32 @@ Target scopes:
 
 Work items:
 
-- add process-specific discovery logs
-- scan target class loaders for classes/methods returning:
+- add process-specific discovery logs - partially done
+- scan target class loaders for classes/methods returning - narrowed to ROM
+  allowlist classes instead of broad scanning:
   - `Location`
   - `List<Location>`
   - callback interfaces with `onLocationChanged`
-- hook common fused-provider return and callback patterns
-- keep an allowlist of known-safe class/method names per ROM
-- add a runtime flag for disabling vendor hooks if a ROM misbehaves
+- hook common fused-provider return and callback patterns - partially done for
+  `FusedLocationProvider` allowlist candidates
+- keep an allowlist of known-safe class/method names per ROM - done
+- add a runtime flag for disabling vendor hooks if a ROM misbehaves - done
 
 Acceptance criteria:
 
-- `fused` provider reports spoofed coordinates where available
-- vendor process hooks do not crash if classes are missing
-- logs show which hooks were installed and which were skipped
+- `fused` provider reports spoofed coordinates where available - done on the
+  owned probe path
+- vendor process hooks do not crash if classes are missing - done
+- logs show which hooks were installed and which were skipped - partially done;
+  runtime dedicated fused-process load logs are still missing
+
+Phase 2 residual gaps:
+
+- a stable standalone `com.android.location.fused` process with module-load and
+  hook-hit logs was not captured on this ROM during this pass
+- `com.oplus.location` and `com.xiaomi.location.fused` are not installed on the
+  current device, so those paths remain defensive placeholders pending another
+  ROM
 
 ## Phase 3 - Structured CellInfo Synthesis
 
@@ -247,11 +264,12 @@ Acceptance criteria:
 
 ## Recommended Execution Order
 
-1. Phase 2: vendor fused-location coverage
+1. Phase 2: capture dedicated fused-process evidence on another ROM or trigger
+   path, then leave vendor placeholders defensive
 2. Phase 5: product completeness
 
 Reasoning:
 
 - Phases 1, 3, and 4 are already in place on the owned Android 15 path.
-- Phase 2 is the main remaining behavior gap.
+- Phase 2 is narrowed but not fully closed.
 - Phase 5 should follow once the provider/process surface is stable.

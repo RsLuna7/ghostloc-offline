@@ -56,6 +56,12 @@ public final class GhostLocModule extends XposedModule {
     private static final String TAG = "GhostLocModule";
     private static final String SELF_PACKAGE = "dev.ghostloc.offline";
     private static final String BRIDGE_PROVIDER = "ghostloc";
+    private static final Set<String> VENDOR_LOCATION_PACKAGES = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList(
+                    "com.android.location.fused",
+                    "com.oplus.location",
+                    "com.xiaomi.location.fused"
+            )));
     private static final Set<String> INSTALLED_DEEP_HOOKS = Collections.synchronizedSet(new HashSet<>());
     private static final Set<String> LOGGED_HITS = Collections.synchronizedSet(new HashSet<>());
     private static volatile XposedInterface bridge;
@@ -86,6 +92,7 @@ public final class GhostLocModule extends XposedModule {
         installWifiHooks();
         installTelephonyHooks();
         installBluetoothHooks();
+        installVendorLocationHooks(param.getClassLoader(), packageName);
         if (SELF_PACKAGE.equals(packageName)) {
             log("self package observed");
         }
@@ -130,6 +137,47 @@ public final class GhostLocModule extends XposedModule {
         hookServiceClass(loader, "com.android.server.location.provider.LocationProviderManager", true);
         hookServiceClass(loader, "com.android.server.location.provider.AbstractLocationProvider", true);
         hookServiceClass(loader, "com.android.server.location.gnss.hal.GnssNative", true);
+    }
+
+    private static void installVendorLocationHooks(ClassLoader loader, String packageName) {
+        if (!vendorHooksEnabled() || packageName == null || !VENDOR_LOCATION_PACKAGES.contains(packageName)) {
+            return;
+        }
+        log("vendor process observed package=" + packageName);
+        hookVendorLocationClass(loader, "com.android.location.fused.FusedLocationProvider");
+        hookVendorLocationClass(loader, "com.android.location.fused.FusedLocationProvider$ChildLocationListener");
+        hookVendorLocationClass(loader, "com.oplus.location.OplusLocationProvider");
+        hookVendorLocationClass(loader, "com.xiaomi.location.fused.XiaomiFusedLocationProvider");
+    }
+
+    private static void hookVendorLocationClass(ClassLoader loader, String className) {
+        Class<?> cls = findClass(loader, className);
+        if (cls == null) {
+            log("vendor class missing " + className);
+            return;
+        }
+        int hooks = 0;
+        for (Method method : cls.getDeclaredMethods()) {
+            String name = method.getName();
+            Class<?> returnType = method.getReturnType();
+            Class<? extends XposedInterface.Hooker> hooker = null;
+            if ("chooseBestLocation".equals(name) && returnType == Location.class) {
+                hooker = VendorLocationReturnHooker.class;
+            } else if ("onLocationChanged".equals(name)) {
+                hooker = VendorLocationArgHooker.class;
+            } else if ("reportBestLocationLocked".equals(name)
+                    || "onSetRequest".equals(name)
+                    || "onFlush".equals(name)
+                    || "start".equals(name)
+                    || "stop".equals(name)) {
+                hooker = VendorTraceHooker.class;
+            }
+            if (hooker != null && hookMethodOnce(method, hooker)) {
+                hooks++;
+                log("vendor method " + cls.getName() + "#" + methodSignature(method));
+            }
+        }
+        log("vendor hooks " + className + " installed=" + hooks);
     }
 
     private static void hookServiceClass(ClassLoader loader, String className, boolean discover) {
@@ -483,6 +531,45 @@ public final class GhostLocModule extends XposedModule {
             if (dispatchNmeaListeners(callback.getArgs())) {
                 callback.returnAndSkip(true);
             }
+        }
+    }
+
+    public static final class VendorLocationReturnHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            logHit(callback, "vendor location");
+            callback.returnAndSkip(makeLocation(LocationManager.FUSED_PROVIDER));
+        }
+    }
+
+    public static final class VendorLocationArgHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!active()) {
+                return;
+            }
+            Object[] args = callback.getArgs();
+            if (args == null) {
+                return;
+            }
+            Location location = makeLocation(LocationManager.FUSED_PROVIDER);
+            boolean replaced = false;
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] instanceof Location) {
+                    args[i] = location;
+                    replaced = true;
+                }
+            }
+            if (replaced) {
+                logHit(callback, "vendor callback");
+            }
+        }
+    }
+
+    public static final class VendorTraceHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            logHit(callback, "vendor trace");
         }
     }
 
@@ -1962,6 +2049,10 @@ public final class GhostLocModule extends XposedModule {
 
     private static boolean mockShield() {
         return prefs().getBoolean(SettingsStore.MOCK_SHIELD, true);
+    }
+
+    private static boolean vendorHooksEnabled() {
+        return prefs().getBoolean(SettingsStore.VENDOR_HOOKS_ENABLED, true);
     }
 
     private static SharedPreferences prefs() {

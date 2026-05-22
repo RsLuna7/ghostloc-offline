@@ -1,6 +1,8 @@
 android
 com.android.phone
 com.android.location.fused
+com.oplus.location
+com.xiaomi.location.fused
 com.android.bluetooth
 dev.ghostloc.offline
 dev.ghostloc.probe

@@ -230,6 +230,36 @@ Result:
 - `LocationManager.getGpsStatus(null)` still returned `null` on this ROM, but it
   did not block the GNSS/NMEA callback acceptance path.
 
+### Phase 2 Fused Provider Coverage
+
+Test coordinate:
+
+```text
+35.689500,139.691700
+```
+
+The ROM exposes installed package `com.android.location.fused` and resolves
+service action `com.android.location.service.FusedLocationProvider` to
+`com.android.location.fused/.FusedLocationService`.
+
+Owned probe evidence for the public fused provider path:
+
+```text
+GhostLocProbe: fused_last_location=35.689500,139.691700 mock=false provider=fused
+GhostLocProbe: fused_current_location=35.689500,139.691700 mock=false provider=fused
+```
+
+Result:
+
+- `LocationManager.getLastKnownLocation("fused")` returned the spoofed
+  coordinate on-device.
+- `LocationManager.getCurrentLocation("fused", ...)` returned the spoofed
+  coordinate on-device.
+- a standalone `com.android.location.fused` module-load / hook-hit log was not
+  captured during this pass, so fused-process-specific evidence remains open.
+- `com.oplus.location` and `com.xiaomi.location.fused` are not installed on the
+  current device.
+
 ### Module Load
 
 ```text
@@ -275,6 +305,7 @@ Pass for the currently implemented public API surfaces:
 - Structured LTE/NR `CellInfo` synthesis is active.
 - `requestCellInfoUpdate()` synthetic callback path is active.
 - `GnssStatus.Callback` and NMEA synthetic callback paths are active.
+- Public `fused` provider coordinate reads are active.
 - Provider status and Geocoder are spoofed.
 - Command bridge is observed without LSPosed error stacks after the read-only
   remote preferences fix.
@@ -285,7 +316,7 @@ Pass for the currently implemented public API surfaces:
   by Android 15 hidden API filtering
 - separate ordinary third-party demo app validation
 - module disable/restore-real-location validation
+- dedicated `com.android.location.fused` process hook-hit evidence is still open
 - legacy `LocationManager.getGpsStatus(null)` snapshot remains `null` on the
   current ROM
-- vendor fused-location process behavior
 - multi-device / multi-ROM test matrix

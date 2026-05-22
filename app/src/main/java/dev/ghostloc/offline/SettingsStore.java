@@ -20,6 +20,7 @@ final class SettingsStore {
     static final String GNSS_SAT_COUNT = "gnss_sat_count";
     static final String NMEA_ENABLED = "nmea_enabled";
     static final String AGPS_ENABLED = "agps_enabled";
+    static final String VENDOR_HOOKS_ENABLED = "vendor_hooks_enabled";
     static final String MOVEMENT = "movement";
     static final String STARTED_AT = "started_at";
     static final String FAVORITES = "favorites";

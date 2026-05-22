@@ -438,6 +438,73 @@ Phase 4 notes:
 - the implementation is defensive: missing GNSS fields or callback methods
   degrade quietly instead of crashing the target process
 
+### Phase 2 - Add fused-provider allowlist hooks
+
+Purpose:
+
+- start Phase 2 of `docs/REPLICATION_PLAN.md`
+- add ROM-bounded fused-provider discovery and hook points without broad unsafe
+  class scanning
+- verify the public `fused` provider path on the OnePlus7 ROM
+
+Main files:
+
+```text
+app/src/main/java/dev/ghostloc/offline/GhostLocModule.java
+app/src/main/java/dev/ghostloc/offline/SettingsStore.java
+app/src/main/resources/META-INF/xposed/scope.list
+probe-app/src/main/java/dev/ghostloc/probe/ProbeActivity.java
+docs/DEVICE_TEST_REPORT.md
+docs/REPLICATION_PLAN.md
+```
+
+ROM findings:
+
+- the current device exposes package `com.android.location.fused`
+- `dumpsys package com.android.location.fused` reports:
+  - service action `com.android.location.service.FusedLocationProvider`
+  - component `com.android.location.fused/.FusedLocationService`
+  - GNSS overlay component
+    `com.android.location.fused/com.android.location.gnss.GnssOverlayLocationService`
+- static APK inspection shows class
+  `com.android.location.fused.FusedLocationProvider`
+  extending `android.location.provider.LocationProviderBase`
+- the OnePlus7 ROM does not currently expose installed packages
+  `com.oplus.location` or `com.xiaomi.location.fused`
+
+Implemented:
+
+- vendor/fused package allowlist:
+  - `com.android.location.fused`
+  - `com.oplus.location`
+  - `com.xiaomi.location.fused`
+- defensive runtime flag `vendor_hooks_enabled`
+- scope metadata expanded to include the Oplus/Xiaomi vendor package names
+- fused allowlist hook attempts for:
+  - `com.android.location.fused.FusedLocationProvider`
+  - `com.android.location.fused.FusedLocationProvider$ChildLocationListener`
+  - placeholder vendor class names for Oplus/Xiaomi with missing-class skip logs
+- fused public probe coverage:
+  - `fused_last_location`
+  - `fused_current_location`
+
+Real-device evidence:
+
+```text
+GhostLocProbe: fused_last_location=35.689500,139.691700 mock=false provider=fused
+GhostLocProbe: fused_current_location=35.689500,139.691700 mock=false provider=fused
+```
+
+Phase 2 notes:
+
+- the owned probe now verifies the public `fused` provider path on-device
+- the ROM still did not surface a stable standalone
+  `com.android.location.fused` process with module load logs during this pass,
+  so dedicated fused-process hook hits remain a follow-up rather than a claimed
+  closed item
+- non-present `com.oplus.location` and `com.xiaomi.location.fused` paths stay
+  defensive and skipped
+
 ## Current Build Artifacts
 
 ```text
@@ -456,7 +523,7 @@ Known gaps:
 
 - app-side direct hidden `ILocationManager` reflection is filtered on Android 15
 - broader third-party app service-path compatibility checks
-- vendor fused-location implementations
+- dedicated fused-process hook-hit evidence is still missing on the current ROM
 - legacy `LocationManager.getGpsStatus(null)` snapshot still returns `null` on
   the current ROM even though the GNSS/NMEA callback paths are spoofed
 - route-management UI equivalent to a polished product

@@ -107,6 +107,17 @@ public final class ProbeActivity extends Activity {
                     location.getLongitude(),
                     isMock(location),
                     location.getProvider()));
+            Location fusedLocation = null;
+            try {
+                fusedLocation = manager.getLastKnownLocation(LocationManager.FUSED_PROVIDER);
+            } catch (Throwable ignored) {
+            }
+            Log.i(TAG, String.format(Locale.US,
+                    "fused_last_location=%.6f,%.6f mock=%s provider=%s",
+                    fusedLocation == null ? 0.0 : fusedLocation.getLatitude(),
+                    fusedLocation == null ? 0.0 : fusedLocation.getLongitude(),
+                    fusedLocation != null && isMock(fusedLocation),
+                    fusedLocation == null ? "null" : fusedLocation.getProvider()));
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 manager.getCurrentLocation(LocationManager.GPS_PROVIDER, new CancellationSignal(),
                         Executors.newSingleThreadExecutor(),
@@ -115,6 +126,14 @@ public final class ProbeActivity extends Activity {
                                 current == null ? 0.0 : current.getLatitude(),
                                 current == null ? 0.0 : current.getLongitude(),
                                 current != null && isMock(current))));
+                manager.getCurrentLocation(LocationManager.FUSED_PROVIDER, new CancellationSignal(),
+                        Executors.newSingleThreadExecutor(),
+                        current -> Log.i(TAG, String.format(Locale.US,
+                                "fused_current_location=%.6f,%.6f mock=%s provider=%s",
+                                current == null ? 0.0 : current.getLatitude(),
+                                current == null ? 0.0 : current.getLongitude(),
+                                current != null && isMock(current),
+                                current == null ? "null" : current.getProvider())));
             }
             LocationListener listener = new LocationListener() {
                 @Override
