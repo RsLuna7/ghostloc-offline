@@ -15,6 +15,14 @@ import android.os.CancellationSignal;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.Settings;
+import android.telephony.CellIdentityLte;
+import android.telephony.CellIdentityNr;
+import android.telephony.CellInfo;
+import android.telephony.CellInfoLte;
+import android.telephony.CellInfoNr;
+import android.telephony.CellSignalStrengthLte;
+import android.telephony.CellSignalStrengthNr;
+import android.telephony.ServiceState;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.widget.TextView;
@@ -23,6 +31,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
+import java.util.StringJoiner;
 import java.util.concurrent.Executors;
 
 public final class ProbeActivity extends Activity {
@@ -299,17 +308,108 @@ public final class ProbeActivity extends Activity {
     private void probeTelephony(StringBuilder report) {
         try {
             TelephonyManager manager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+            List<CellInfo> cells = manager.getAllCellInfo();
+            ServiceState serviceState = manager.getServiceState();
             report.append("network_type=").append(manager.getNetworkType())
+                    .append(" data_type=").append(manager.getDataNetworkType())
+                    .append(" voice_type=").append(manager.getVoiceNetworkType())
                     .append(" phone_type=").append(manager.getPhoneType())
                     .append(" operator=").append(manager.getNetworkOperator())
                     .append(" operator_name=").append(manager.getNetworkOperatorName())
                     .append(" country=").append(manager.getNetworkCountryIso())
                     .append(" roaming=").append(manager.isNetworkRoaming())
-                    .append(" cells=").append(manager.getAllCellInfo() == null ? -1 : manager.getAllCellInfo().size())
+                    .append(" service_numeric=").append(serviceState == null ? "null" : serviceState.getOperatorNumeric())
+                    .append(" service_alpha=").append(serviceState == null ? "null" : serviceState.getOperatorAlphaLong())
+                    .append(" cells=").append(cells == null ? -1 : cells.size())
+                    .append("\n")
+                    .append("cell_details=").append(describeCells(cells))
                     .append("\n");
+            Log.i(TAG, "public_cells=" + describeCells(cells));
+            Log.i(TAG, "public_service_state=" + describeServiceState(serviceState));
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                manager.requestCellInfoUpdate(
+                        Executors.newSingleThreadExecutor(),
+                        new TelephonyManager.CellInfoCallback() {
+                            @Override
+                            public void onCellInfo(List<CellInfo> value) {
+                                Log.i(TAG, "cellinfo_callback=" + describeCells(value));
+                            }
+
+                            @Override
+                            public void onError(int errorCode, Throwable detail) {
+                                Log.i(TAG, "cellinfo_callback_error=" + errorCode + ","
+                                        + (detail == null ? "null" : detail.getClass().getSimpleName()));
+                            }
+                        });
+            }
         } catch (Throwable throwable) {
             report.append("telephony_error=").append(throwable.getClass().getSimpleName()).append("\n");
         }
+    }
+
+    private String describeServiceState(ServiceState state) {
+        if (state == null) {
+            return "null";
+        }
+        return "state=" + state.getState()
+                + " roaming=" + state.getRoaming()
+                + " operator=" + state.getOperatorNumeric()
+                + " alpha=" + state.getOperatorAlphaLong()
+                + " regs=" + state.getNetworkRegistrationInfoList().size();
+    }
+
+    private String describeCells(List<CellInfo> cells) {
+        if (cells == null) {
+            return "null";
+        }
+        StringJoiner joiner = new StringJoiner(" | ");
+        for (CellInfo cell : cells) {
+            joiner.add(describeCell(cell));
+        }
+        return joiner.toString();
+    }
+
+    private String describeCell(CellInfo cell) {
+        if (cell == null) {
+            return "null";
+        }
+        if (cell instanceof CellInfoLte lte) {
+            CellIdentityLte identity = lte.getCellIdentity();
+            CellSignalStrengthLte signal = lte.getCellSignalStrength();
+            return String.format(Locale.US,
+                    "LTE reg=%s status=%d mcc=%s mnc=%s ci=%d pci=%d tac=%d earfcn=%d rsrp=%d rsrq=%d rssnr=%d ta=%d",
+                    lte.isRegistered(),
+                    lte.getCellConnectionStatus(),
+                    identity == null ? "null" : identity.getMccString(),
+                    identity == null ? "null" : identity.getMncString(),
+                    identity == null ? -1 : identity.getCi(),
+                    identity == null ? -1 : identity.getPci(),
+                    identity == null ? -1 : identity.getTac(),
+                    identity == null ? -1 : identity.getEarfcn(),
+                    signal == null ? 0 : signal.getRsrp(),
+                    signal == null ? 0 : signal.getRsrq(),
+                    signal == null ? 0 : signal.getRssnr(),
+                    signal == null ? 0 : signal.getTimingAdvance());
+        }
+        if (cell instanceof CellInfoNr nr) {
+            CellIdentityNr identity = (CellIdentityNr) nr.getCellIdentity();
+            CellSignalStrengthNr signal = (CellSignalStrengthNr) nr.getCellSignalStrength();
+            return String.format(Locale.US,
+                    "NR reg=%s status=%d mcc=%s mnc=%s nci=%d pci=%d tac=%d nrarfcn=%d ssRsrp=%d ssRsrq=%d ssSinr=%d",
+                    nr.isRegistered(),
+                    nr.getCellConnectionStatus(),
+                    identity == null ? "null" : identity.getMccString(),
+                    identity == null ? "null" : identity.getMncString(),
+                    identity == null ? 0L : identity.getNci(),
+                    identity == null ? -1 : identity.getPci(),
+                    identity == null ? -1 : identity.getTac(),
+                    identity == null ? -1 : identity.getNrarfcn(),
+                    signal == null ? 0 : signal.getSsRsrp(),
+                    signal == null ? 0 : signal.getSsRsrq(),
+                    signal == null ? 0 : signal.getSsSinr());
+        }
+        return cell.getClass().getSimpleName() + " reg=" + cell.isRegistered()
+                + " status=" + cell.getCellConnectionStatus();
     }
 
     private boolean isMock(Location location) {

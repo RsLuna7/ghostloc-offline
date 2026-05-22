@@ -5,7 +5,7 @@ offline MVP toward a more complete original-equivalent feature set.
 
 ## Current Completion
 
-Approximate completion: 70-75% of the visible/core feature surface.
+Approximate completion: 80-85% of the visible/core feature surface.
 
 Completed:
 
@@ -20,13 +20,13 @@ Completed:
 - Wi-Fi cleanup
 - basic telephony cleanup
 - Android 15 OnePlus7 `system_server` location service hooks
+- structured LTE/NR `CellInfo` synthesis
 - owned probe app and real-device verification
 
 Not complete:
 
 - broader third-party app service-path compatibility checks
 - vendor fused-location hooks
-- non-empty structured cell identity synthesis
 - GNSS/NMEA/satellite state
 - polished route UI and product controls
 - broad compatibility testing
@@ -108,6 +108,9 @@ Acceptance criteria:
 Goal: replace the current empty-cell-list behavior with internally consistent
 synthetic cell data.
 
+Status: implemented and verified on OnePlus7 / GM1901 / Android SDK 35 for the
+owned probe path.
+
 Data model:
 
 ```text
@@ -127,25 +130,34 @@ CellProfile
 
 Work items:
 
-- add `CellProfile` settings storage
-- implement LTE profile generation from selected coordinate
-- implement optional NR profile generation
-- synthesize:
+- add `CellProfile` settings storage - done
+- implement LTE profile generation from selected coordinate - done
+- implement optional NR profile generation - done
+- synthesize - done:
   - `CellInfoLte`
   - `CellIdentityLte`
   - `CellSignalStrengthLte`
   - `CellInfoNr` where supported
-- handle Android 10-15 constructor differences by reflection
-- fall back to Parcel-based object creation if reflection is not enough
-- hook `requestCellInfoUpdate` callback path
-- fill `ServiceState` registration/operator fields consistently
+- handle Android 10-15 constructor differences by reflection - done on Android 15
+- fall back to Parcel-based object creation if reflection is not enough - not
+  needed on the current device
+- hook `requestCellInfoUpdate` callback path - done
+- fill `ServiceState` registration/operator fields consistently - done
 
 Acceptance criteria:
 
-- `TelephonyManager.getAllCellInfo()` returns non-empty synthetic cell data
-- `requestCellInfoUpdate()` receives non-empty synthetic cell data
-- operator, country, service state, and cell identity agree
-- no crash when SIM is absent or permissions are partial
+- `TelephonyManager.getAllCellInfo()` returns non-empty synthetic cell data -
+  done
+- `requestCellInfoUpdate()` receives non-empty synthetic cell data - done
+- operator, country, service state, and cell identity agree - done
+- no crash when SIM is absent or permissions are partial - no crash observed on
+  owned probe path; broader app matrix still open
+
+Phase 3 residual gaps:
+
+- broader third-party app validation is still open
+- Parcel-based fallback remains available as a contingency item if another ROM
+  blocks the constructor-plus-field population path
 
 ## Phase 4 - GNSS, NMEA, and Satellite State
 
@@ -224,16 +236,13 @@ Acceptance criteria:
 
 ## Recommended Execution Order
 
-1. Phase 1: deep location service hooks
-2. Phase 3: structured cell synthesis
-3. Phase 4: GNSS/NMEA
-4. Phase 2: vendor fused-location coverage
-5. Phase 5: product completeness
+1. Phase 4: GNSS/NMEA
+2. Phase 2: vendor fused-location coverage
+3. Phase 5: product completeness
 
 Reasoning:
 
-- Phase 1 and Phase 3 are the main technical gaps.
-- Phase 4 improves realism and consistency.
-- Phase 2 needs per-ROM discovery and should be added after the core path is
-  stable.
+- Phase 1 and Phase 3 are already in place on the owned Android 15 path.
+- Phase 4 is the main realism gap now.
+- Phase 2 still needs per-ROM discovery and should be added after GNSS/NMEA.
 - Phase 5 is best done after the behavior surface stops moving.

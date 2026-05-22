@@ -14,10 +14,23 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.SupplicantState;
 import android.provider.Settings;
+import android.telephony.AccessNetworkConstants;
+import android.telephony.CellIdentity;
+import android.telephony.CellIdentityLte;
+import android.telephony.CellIdentityNr;
+import android.telephony.CellInfo;
+import android.telephony.CellInfoLte;
+import android.telephony.CellInfoNr;
+import android.telephony.CellSignalStrengthLte;
+import android.telephony.CellSignalStrengthNr;
+import android.telephony.NetworkRegistrationInfo;
 import android.telephony.ServiceState;
 import android.telephony.TelephonyManager;
+import android.util.ArraySet;
 import android.util.Log;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -270,11 +283,13 @@ public final class GhostLocModule extends XposedModule {
             for (Method method : TelephonyManager.class.getDeclaredMethods()) {
                 String name = method.getName();
                 if ("getAllCellInfo".equals(name)) {
-                    bridge.hook(method, EmptyListHooker.class);
+                    bridge.hook(method, CellInfoHooker.class);
+                } else if ("requestCellInfoUpdate".equals(name)) {
+                    bridge.hook(method, RequestCellInfoUpdateHooker.class);
                 } else if ("getNetworkType".equals(name)
                         || "getDataNetworkType".equals(name)
                         || "getVoiceNetworkType".equals(name)) {
-                    bridge.hook(method, LteHooker.class);
+                    bridge.hook(method, NetworkTypeHooker.class);
                 } else if ("isNetworkRoaming".equals(name)) {
                     bridge.hook(method, FalseHooker.class);
                 } else if ("getServiceState".equals(name) && method.getReturnType() == ServiceState.class) {
@@ -496,11 +511,44 @@ public final class GhostLocModule extends XposedModule {
         }
     }
 
-    public static final class LteHooker implements XposedInterface.Hooker {
+    public static final class CellInfoHooker implements XposedInterface.Hooker {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (cellShield()) {
-                callback.returnAndSkip(TelephonyManager.NETWORK_TYPE_LTE);
+                callback.returnAndSkip(makeCellInfoList());
             }
+        }
+    }
+
+    public static final class RequestCellInfoUpdateHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!cellShield()) {
+                return;
+            }
+            List<CellInfo> cells = makeCellInfoList();
+            if (dispatchCellInfoCallback(callback.getArgs(), cells)) {
+                logHit(callback, "cell callback");
+                callback.returnAndSkip(null);
+            }
+        }
+    }
+
+    public static final class NetworkTypeHooker implements XposedInterface.Hooker {
+        public static void before(XposedInterface.BeforeHookCallback callback) {
+            if (!cellShield()) {
+                return;
+            }
+            CellProfile profile = currentCellProfile();
+            Object member = callback.getMember();
+            String name = member instanceof Method method ? method.getName() : "";
+            int value;
+            if ("getVoiceNetworkType".equals(name)) {
+                value = TelephonyManager.NETWORK_TYPE_LTE;
+            } else if (profile.nrEnabled) {
+                value = TelephonyManager.NETWORK_TYPE_NR;
+            } else {
+                value = TelephonyManager.NETWORK_TYPE_LTE;
+            }
+            callback.returnAndSkip(value);
         }
     }
 
@@ -515,7 +563,7 @@ public final class GhostLocModule extends XposedModule {
     public static final class OperatorCodeHooker implements XposedInterface.Hooker {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (cellShield()) {
-                callback.returnAndSkip("00101");
+                callback.returnAndSkip(currentCellProfile().operatorNumeric());
             }
         }
     }
@@ -523,7 +571,7 @@ public final class GhostLocModule extends XposedModule {
     public static final class OperatorNameHooker implements XposedInterface.Hooker {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (cellShield()) {
-                callback.returnAndSkip("GhostLoc");
+                callback.returnAndSkip(currentCellProfile().operatorName);
             }
         }
     }
@@ -531,7 +579,7 @@ public final class GhostLocModule extends XposedModule {
     public static final class CountryIsoHooker implements XposedInterface.Hooker {
         public static void before(XposedInterface.BeforeHookCallback callback) {
             if (cellShield()) {
-                callback.returnAndSkip("us");
+                callback.returnAndSkip(currentCellProfile().countryIso);
             }
         }
     }
@@ -859,19 +907,344 @@ public final class GhostLocModule extends XposedModule {
         }
     }
 
+    private static List<CellInfo> makeCellInfoList() {
+        CellProfile profile = currentCellProfile();
+        ArrayList<CellInfo> cells = new ArrayList<>();
+        CellInfoLte lte = makeLteCellInfo(profile);
+        if (lte != null) {
+            cells.add(lte);
+        }
+        if (profile.nrEnabled) {
+            CellInfoNr nr = makeNrCellInfo(profile);
+            if (nr != null) {
+                cells.add(nr);
+            }
+        }
+        return cells;
+    }
+
+    private static CellProfile currentCellProfile() {
+        SharedPreferences sharedPreferences = prefs();
+        double lat = currentLat();
+        double lon = currentLon();
+        CarrierPreset preset = carrierPresetFor(lat, lon);
+        String mcc = stringPreference(sharedPreferences, SettingsStore.CELL_MCC, preset.mcc);
+        String mnc = stringPreference(sharedPreferences, SettingsStore.CELL_MNC, preset.mnc);
+        String countryIso = stringPreference(sharedPreferences, SettingsStore.CELL_COUNTRY_ISO, preset.countryIso);
+        String operatorName = stringPreference(sharedPreferences, SettingsStore.CELL_OPERATOR_NAME, preset.operatorName);
+        boolean nrEnabled = android.os.Build.VERSION.SDK_INT >= 29
+                && sharedPreferences.getBoolean(SettingsStore.CELL_ENABLE_NR, true);
+        long seed = mixSeed(lat, lon, mcc, mnc, operatorName);
+        int lteTac = 1000 + positiveInt(seed, 60000 - 1000);
+        int lteCi = 1 + positiveInt(Long.rotateLeft(seed, 7), 0x0ffffffe);
+        int ltePci = positiveInt(Long.rotateLeft(seed, 13), 503);
+        int lteEarfcn = 1200 + positiveInt(Long.rotateLeft(seed, 17), 3200);
+        int[] lteBands = new int[]{preset.lteBand};
+        int lteBandwidth = preset.lteBandwidthKhz;
+        int lteRsrp = -88 - positiveInt(Long.rotateLeft(seed, 19), 18);
+        int lteRsrq = -8 - positiveInt(Long.rotateLeft(seed, 23), 8);
+        int lteRssnr = 50 + positiveInt(Long.rotateLeft(seed, 29), 160);
+        int lteRssi = -62 - positiveInt(Long.rotateLeft(seed, 31), 18);
+        int lteTimingAdvance = 1 + positiveInt(Long.rotateLeft(seed, 37), 64);
+        long nrNci = 1L + positiveLong(Long.rotateLeft(seed, 41), 68_719_476_734L);
+        int nrTac = 2000 + positiveInt(Long.rotateLeft(seed, 43), 60000 - 2000);
+        int nrPci = positiveInt(Long.rotateLeft(seed, 47), 1008);
+        int nrArfcn = preset.nrArfcnBase + positiveInt(Long.rotateLeft(seed, 53), 20000);
+        int[] nrBands = new int[]{preset.nrBand};
+        int nrSsRsrp = -86 - positiveInt(Long.rotateLeft(seed, 59), 20);
+        int nrSsRsrq = -10 - positiveInt(Long.rotateLeft(seed, 61), 8);
+        int nrSsSinr = 30 + positiveInt(Long.rotateLeft(seed, 5), 140);
+        int nrCsiRsrp = nrSsRsrp + 2;
+        int nrCsiRsrq = nrSsRsrq + 1;
+        int nrCsiSinr = nrSsSinr + 5;
+        int nrTimingAdvance = 10 + positiveInt(Long.rotateLeft(seed, 11), 120);
+        return new CellProfile(
+                mcc,
+                mnc,
+                countryIso,
+                operatorName,
+                nrEnabled,
+                lteTac,
+                lteCi,
+                ltePci,
+                lteEarfcn,
+                lteBands,
+                lteBandwidth,
+                lteRssi,
+                lteRsrp,
+                lteRsrq,
+                lteRssnr,
+                lteTimingAdvance,
+                nrTac,
+                nrNci,
+                nrPci,
+                nrArfcn,
+                nrBands,
+                nrSsRsrp,
+                nrSsRsrq,
+                nrSsSinr,
+                nrCsiRsrp,
+                nrCsiRsrq,
+                nrCsiSinr,
+                nrTimingAdvance
+        );
+    }
+
+    private static CellInfoLte makeLteCellInfo(CellProfile profile) {
+        CellInfoLte info = newInstance(CellInfoLte.class);
+        if (info == null) {
+            log("CellInfoLte ctor unavailable");
+            return null;
+        }
+        applyBaseCellInfo(info, true, CellInfo.CONNECTION_PRIMARY_SERVING);
+        CellIdentityLte identity = newInstance(CellIdentityLte.class);
+        CellSignalStrengthLte signal = newInstance(CellSignalStrengthLte.class);
+        if (identity == null || signal == null) {
+            log("LTE identity/signal ctor unavailable");
+            return info;
+        }
+        applyBaseCellIdentity(identity, profile, "CellIdentityLte");
+        setFieldIfPresent(identity, "mCi", profile.lteCi);
+        setFieldIfPresent(identity, "mPci", profile.ltePci);
+        setFieldIfPresent(identity, "mTac", profile.lteTac);
+        setFieldIfPresent(identity, "mEarfcn", profile.lteEarfcn);
+        setFieldIfPresent(identity, "mBandwidth", profile.lteBandwidth);
+        setFieldIfPresent(identity, "mBands", profile.lteBands);
+        setFieldIfPresent(identity, "mAdditionalPlmns", new ArraySet<String>());
+        setFieldIfPresent(signal, "mRssi", profile.lteRssi);
+        setFieldIfPresent(signal, "mRsrp", profile.lteRsrp);
+        setFieldIfPresent(signal, "mRsrq", profile.lteRsrq);
+        setFieldIfPresent(signal, "mRssnr", profile.lteRssnr);
+        setFieldIfPresent(signal, "mCqi", 9);
+        setFieldIfPresent(signal, "mCqiTableIndex", 1);
+        setFieldIfPresent(signal, "mTimingAdvance", profile.lteTimingAdvance);
+        setFieldIfPresent(signal, "mLevel", 4);
+        setFieldIfPresent(signal, "mParametersUseForLevel", 1);
+        setFieldIfPresent(info, "mCellIdentityLte", identity);
+        setFieldIfPresent(info, "mCellSignalStrengthLte", signal);
+        return info;
+    }
+
+    private static CellInfoNr makeNrCellInfo(CellProfile profile) {
+        CellInfoNr info = newInstance(CellInfoNr.class);
+        if (info == null) {
+            log("CellInfoNr ctor unavailable");
+            return null;
+        }
+        applyBaseCellInfo(info, false, CellInfo.CONNECTION_SECONDARY_SERVING);
+        CellIdentityNr identity = newInstance(CellIdentityNr.class);
+        CellSignalStrengthNr signal = newInstance(CellSignalStrengthNr.class);
+        if (identity == null || signal == null) {
+            log("NR identity/signal ctor unavailable");
+            return info;
+        }
+        applyBaseCellIdentity(identity, profile, "CellIdentityNr");
+        setFieldIfPresent(identity, "mNci", profile.nrNci);
+        setFieldIfPresent(identity, "mPci", profile.nrPci);
+        setFieldIfPresent(identity, "mTac", profile.nrTac);
+        setFieldIfPresent(identity, "mNrArfcn", profile.nrArfcn);
+        setFieldIfPresent(identity, "mBands", profile.nrBands);
+        setFieldIfPresent(identity, "mAdditionalPlmns", new ArraySet<String>());
+        setFieldIfPresent(signal, "mSsRsrp", profile.nrSsRsrp);
+        setFieldIfPresent(signal, "mSsRsrq", profile.nrSsRsrq);
+        setFieldIfPresent(signal, "mSsSinr", profile.nrSsSinr);
+        setFieldIfPresent(signal, "mCsiRsrp", profile.nrCsiRsrp);
+        setFieldIfPresent(signal, "mCsiRsrq", profile.nrCsiRsrq);
+        setFieldIfPresent(signal, "mCsiSinr", profile.nrCsiSinr);
+        setFieldIfPresent(signal, "mTimingAdvance", profile.nrTimingAdvance);
+        setFieldIfPresent(signal, "mLevel", 4);
+        setFieldIfPresent(signal, "mParametersUseForLevel", 1);
+        setFieldIfPresent(info, "mCellIdentity", identity);
+        setFieldIfPresent(info, "mCellSignalStrength", signal);
+        return info;
+    }
+
+    private static void applyBaseCellInfo(CellInfo cellInfo, boolean registered, int connectionStatus) {
+        tryInvoke(cellInfo, "setRegistered", new Class<?>[]{boolean.class}, new Object[]{registered});
+        tryInvoke(cellInfo, "setTimeStamp", new Class<?>[]{long.class}, new Object[]{System.currentTimeMillis()});
+        tryInvoke(cellInfo, "setCellConnectionStatus", new Class<?>[]{int.class}, new Object[]{connectionStatus});
+        setFieldIfPresent(cellInfo, "mRegistered", registered);
+        setFieldIfPresent(cellInfo, "mTimeStamp", System.currentTimeMillis());
+        setFieldIfPresent(cellInfo, "mCellConnectionStatus", connectionStatus);
+    }
+
+    private static void applyBaseCellIdentity(Object identity, CellProfile profile, String tag) {
+        setFieldIfPresent(identity, "mTag", tag);
+        setFieldIfPresent(identity, "mType", tag.endsWith("Nr") ? 6 : 3);
+        setFieldIfPresent(identity, "mMccStr", profile.mcc);
+        setFieldIfPresent(identity, "mMncStr", profile.mnc);
+        setFieldIfPresent(identity, "mAlphaLong", profile.operatorName);
+        setFieldIfPresent(identity, "mAlphaShort", profile.operatorName);
+        setFieldIfPresent(identity, "mGlobalCellId", profile.operatorNumeric());
+    }
+
+    private static boolean dispatchCellInfoCallback(Object[] args, List<CellInfo> cells) {
+        if (args == null) {
+            return false;
+        }
+        Executor executor = null;
+        Object callback = null;
+        for (Object arg : args) {
+            if (arg instanceof Executor value) {
+                executor = value;
+            } else if (arg != null && hasMethod(arg.getClass(), "onCellInfo", List.class)) {
+                callback = arg;
+            }
+        }
+        if (callback == null) {
+            return false;
+        }
+        final Object callbackTarget = callback;
+        Runnable task = () -> {
+            if (!tryInvoke(callbackTarget, "onCellInfo", new Class<?>[]{List.class}, new Object[]{cells})) {
+                log("cell callback dispatch failed " + callbackTarget.getClass().getName());
+            }
+        };
+        if (executor != null) {
+            executor.execute(task);
+        } else {
+            task.run();
+        }
+        return true;
+    }
+
     private static ServiceState makeServiceState() {
+        CellProfile profile = currentCellProfile();
         ServiceState serviceState = new ServiceState();
         tryInvoke(serviceState, "setState", new Class<?>[]{int.class}, new Object[]{ServiceState.STATE_IN_SERVICE});
+        tryInvoke(serviceState, "setVoiceRegState", new Class<?>[]{int.class}, new Object[]{ServiceState.STATE_IN_SERVICE});
+        tryInvoke(serviceState, "setDataRegState", new Class<?>[]{int.class}, new Object[]{ServiceState.STATE_IN_SERVICE});
         tryInvoke(serviceState, "setRoaming", new Class<?>[]{boolean.class}, new Object[]{false});
         tryInvoke(serviceState, "setOperatorName",
                 new Class<?>[]{String.class, String.class, String.class},
-                new Object[]{"GhostLoc", "GhostLoc", "00101"});
+                new Object[]{profile.operatorName, profile.operatorName, profile.operatorNumeric()});
+        CellIdentityLte lteIdentity = makeLteCellIdentity(profile);
+        Object voiceRegistration = makeNetworkRegistrationInfo(
+                profile,
+                NetworkRegistrationInfo.DOMAIN_CS,
+                TelephonyManager.NETWORK_TYPE_LTE,
+                Arrays.asList(NetworkRegistrationInfo.SERVICE_TYPE_VOICE, NetworkRegistrationInfo.SERVICE_TYPE_SMS),
+                lteIdentity,
+                false
+        );
+        if (voiceRegistration != null) {
+            tryInvoke(serviceState, "addNetworkRegistrationInfo",
+                    new Class<?>[]{NetworkRegistrationInfo.class},
+                    new Object[]{voiceRegistration});
+        }
+        Object dataIdentity = profile.nrEnabled ? makeNrCellIdentity(profile) : lteIdentity;
+        int dataNetworkType = profile.nrEnabled ? TelephonyManager.NETWORK_TYPE_NR : TelephonyManager.NETWORK_TYPE_LTE;
+        Object dataRegistration = makeNetworkRegistrationInfo(
+                profile,
+                NetworkRegistrationInfo.DOMAIN_PS,
+                dataNetworkType,
+                Arrays.asList(NetworkRegistrationInfo.SERVICE_TYPE_DATA, NetworkRegistrationInfo.SERVICE_TYPE_MMS),
+                dataIdentity,
+                profile.nrEnabled
+        );
+        if (dataRegistration != null) {
+            tryInvoke(serviceState, "addNetworkRegistrationInfo",
+                    new Class<?>[]{NetworkRegistrationInfo.class},
+                    new Object[]{dataRegistration});
+        }
         return serviceState;
+    }
+
+    private static CellIdentityLte makeLteCellIdentity(CellProfile profile) {
+        CellInfoLte info = makeLteCellInfo(profile);
+        return info == null ? null : info.getCellIdentity();
+    }
+
+    private static CellIdentityNr makeNrCellIdentity(CellProfile profile) {
+        CellInfoNr info = makeNrCellInfo(profile);
+        return info == null ? null : (CellIdentityNr) info.getCellIdentity();
+    }
+
+    private static Object makeNetworkRegistrationInfo(
+            CellProfile profile,
+            int domain,
+            int accessNetworkTechnology,
+            List<Integer> services,
+            Object cellIdentity,
+            boolean markNrConnected
+    ) {
+        Class<?> builderClass = findClass(GhostLocModule.class.getClassLoader(),
+                "android.telephony.NetworkRegistrationInfo$Builder");
+        if (builderClass == null) {
+            return null;
+        }
+        Object builder = newInstance(builderClass);
+        if (builder == null) {
+            return null;
+        }
+        tryInvoke(builder, "setDomain", new Class<?>[]{int.class}, new Object[]{domain});
+        tryInvoke(builder, "setTransportType", new Class<?>[]{int.class},
+                new Object[]{AccessNetworkConstants.TRANSPORT_TYPE_WWAN});
+        tryInvoke(builder, "setRegistrationState", new Class<?>[]{int.class}, new Object[]{1});
+        tryInvoke(builder, "setAccessNetworkTechnology", new Class<?>[]{int.class}, new Object[]{accessNetworkTechnology});
+        tryInvoke(builder, "setRejectCause", new Class<?>[]{int.class}, new Object[]{0});
+        tryInvoke(builder, "setEmergencyOnly", new Class<?>[]{boolean.class}, new Object[]{false});
+        tryInvoke(builder, "setAvailableServices", new Class<?>[]{List.class}, new Object[]{services});
+        if (cellIdentity instanceof CellIdentity identity) {
+            tryInvoke(builder, "setCellIdentity", new Class<?>[]{CellIdentity.class}, new Object[]{identity});
+        }
+        tryInvoke(builder, "setRegisteredPlmn", new Class<?>[]{String.class}, new Object[]{profile.operatorNumeric()});
+        Object registrationInfo = tryInstanceInvoke(builder, "build", new Class<?>[0], new Object[0]);
+        if (registrationInfo != null && markNrConnected) {
+            tryInvoke(registrationInfo, "setNrState", new Class<?>[]{int.class},
+                    new Object[]{NetworkRegistrationInfo.NR_STATE_CONNECTED});
+        }
+        return registrationInfo;
+    }
+
+    private static CarrierPreset carrierPresetFor(double lat, double lon) {
+        if (lat >= 29.0 && lat <= 46.5 && lon >= 129.0 && lon <= 146.5) {
+            return new CarrierPreset("440", "10", "jp", "NTT DOCOMO", 3, 20_000, 640_000, 78);
+        }
+        if (lat >= 18.0 && lat <= 54.5 && lon >= 73.0 && lon <= 135.5) {
+            return new CarrierPreset("460", "00", "cn", "China Mobile", 41, 20_000, 627_000, 78);
+        }
+        if (lat >= 32.0 && lat <= 43.0 && lon >= 124.0 && lon <= 132.5) {
+            return new CarrierPreset("450", "05", "kr", "SK Telecom", 3, 15_000, 634_000, 78);
+        }
+        if (lat >= 49.0 && lat <= 61.0 && lon >= -9.0 && lon <= 3.5) {
+            return new CarrierPreset("234", "15", "gb", "Vodafone UK", 20, 20_000, 635_000, 78);
+        }
+        if (lat >= 18.0 && lat <= 72.0 && lon >= -170.0 && lon <= -60.0) {
+            return new CarrierPreset("310", "260", "us", "T-Mobile", 2, 20_000, 636_000, 41);
+        }
+        return new CarrierPreset("001", "01", "us", "GhostLoc", 3, 15_000, 635_000, 78);
+    }
+
+    private static String stringPreference(SharedPreferences sharedPreferences, String key, String fallback) {
+        String value = sharedPreferences.getString(key, fallback);
+        return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private static long mixSeed(double lat, double lon, String mcc, String mnc, String operatorName) {
+        long seed = Double.doubleToLongBits(lat) * 0x9e3779b97f4a7c15L;
+        seed ^= Long.rotateLeft(Double.doubleToLongBits(lon), 29);
+        seed ^= ((long) mcc.hashCode() << 32);
+        seed ^= mnc.hashCode();
+        seed ^= Long.rotateLeft(operatorName.hashCode(), 11);
+        return seed ^ 0x51ed270b7f4a7c15L;
+    }
+
+    private static int positiveInt(long seed, int bound) {
+        return bound <= 0 ? 0 : (int) Math.floorMod(seed, (long) bound);
+    }
+
+    private static long positiveLong(long seed, long bound) {
+        return bound <= 0 ? 0L : Math.floorMod(seed, bound);
     }
 
     private static boolean tryInvoke(Object target, String methodName, Class<?>[] types, Object[] args) {
         try {
-            Method method = target.getClass().getMethod(methodName, types);
+            Method method = resolveMethod(target.getClass(), methodName, types);
+            if (method == null) {
+                return false;
+            }
+            method.setAccessible(true);
             method.invoke(target, args);
             return true;
         } catch (Throwable ignored) {
@@ -879,14 +1252,97 @@ public final class GhostLocModule extends XposedModule {
         }
     }
 
+    private static Object tryInstanceInvoke(Object target, String methodName, Class<?>[] types, Object[] args) {
+        try {
+            Method method = resolveMethod(target.getClass(), methodName, types);
+            if (method == null) {
+                return null;
+            }
+            method.setAccessible(true);
+            return method.invoke(target, args);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static Object tryStaticInvoke(Class<?> cls, String methodName, Class<?>[] types, Object[] args) {
         try {
-            Method method = cls.getDeclaredMethod(methodName, types);
+            Method method = resolveMethod(cls, methodName, types);
+            if (method == null) {
+                return null;
+            }
             method.setAccessible(true);
             return method.invoke(null, args);
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static Method resolveMethod(Class<?> cls, String methodName, Class<?>[] types) {
+        Class<?> current = cls;
+        while (current != null) {
+            try {
+                return current.getDeclaredMethod(methodName, types);
+            } catch (NoSuchMethodException ignored) {
+            }
+            current = current.getSuperclass();
+        }
+        try {
+            return cls.getMethod(methodName, types);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static boolean hasMethod(Class<?> cls, String methodName, Class<?>... types) {
+        return resolveMethod(cls, methodName, types) != null;
+    }
+
+    private static <T> T newInstance(Class<T> cls) {
+        try {
+            Constructor<T> constructor = cls.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            return constructor.newInstance();
+        } catch (Throwable throwable) {
+            return null;
+        }
+    }
+
+    private static <T> T newInstance(Class<?> cls, Class<T> type) {
+        try {
+            Constructor<?> constructor = cls.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Object value = constructor.newInstance();
+            return type.cast(value);
+        } catch (Throwable throwable) {
+            return null;
+        }
+    }
+
+    private static boolean setFieldIfPresent(Object target, String fieldName, Object value) {
+        Field field = resolveField(target.getClass(), fieldName);
+        if (field == null) {
+            return false;
+        }
+        try {
+            field.setAccessible(true);
+            field.set(target, value);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Field resolveField(Class<?> cls, String fieldName) {
+        Class<?> current = cls;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(fieldName);
+            } catch (NoSuchFieldException ignored) {
+            }
+            current = current.getSuperclass();
+        }
+        return null;
     }
 
     private static double[] move(double lat, double lon, float speedMps, float bearingDeg, double seconds) {
@@ -987,6 +1443,132 @@ public final class GhostLocModule extends XposedModule {
             }
         }
         return false;
+    }
+
+    private static final class CarrierPreset {
+        final String mcc;
+        final String mnc;
+        final String countryIso;
+        final String operatorName;
+        final int lteBand;
+        final int lteBandwidthKhz;
+        final int nrArfcnBase;
+        final int nrBand;
+
+        CarrierPreset(
+                String mcc,
+                String mnc,
+                String countryIso,
+                String operatorName,
+                int lteBand,
+                int lteBandwidthKhz,
+                int nrArfcnBase,
+                int nrBand
+        ) {
+            this.mcc = mcc;
+            this.mnc = mnc;
+            this.countryIso = countryIso;
+            this.operatorName = operatorName;
+            this.lteBand = lteBand;
+            this.lteBandwidthKhz = lteBandwidthKhz;
+            this.nrArfcnBase = nrArfcnBase;
+            this.nrBand = nrBand;
+        }
+    }
+
+    private static final class CellProfile {
+        final String mcc;
+        final String mnc;
+        final String countryIso;
+        final String operatorName;
+        final boolean nrEnabled;
+        final int lteTac;
+        final int lteCi;
+        final int ltePci;
+        final int lteEarfcn;
+        final int[] lteBands;
+        final int lteBandwidth;
+        final int lteRssi;
+        final int lteRsrp;
+        final int lteRsrq;
+        final int lteRssnr;
+        final int lteTimingAdvance;
+        final int nrTac;
+        final long nrNci;
+        final int nrPci;
+        final int nrArfcn;
+        final int[] nrBands;
+        final int nrSsRsrp;
+        final int nrSsRsrq;
+        final int nrSsSinr;
+        final int nrCsiRsrp;
+        final int nrCsiRsrq;
+        final int nrCsiSinr;
+        final int nrTimingAdvance;
+
+        CellProfile(
+                String mcc,
+                String mnc,
+                String countryIso,
+                String operatorName,
+                boolean nrEnabled,
+                int lteTac,
+                int lteCi,
+                int ltePci,
+                int lteEarfcn,
+                int[] lteBands,
+                int lteBandwidth,
+                int lteRssi,
+                int lteRsrp,
+                int lteRsrq,
+                int lteRssnr,
+                int lteTimingAdvance,
+                int nrTac,
+                long nrNci,
+                int nrPci,
+                int nrArfcn,
+                int[] nrBands,
+                int nrSsRsrp,
+                int nrSsRsrq,
+                int nrSsSinr,
+                int nrCsiRsrp,
+                int nrCsiRsrq,
+                int nrCsiSinr,
+                int nrTimingAdvance
+        ) {
+            this.mcc = mcc;
+            this.mnc = mnc;
+            this.countryIso = countryIso;
+            this.operatorName = operatorName;
+            this.nrEnabled = nrEnabled;
+            this.lteTac = lteTac;
+            this.lteCi = lteCi;
+            this.ltePci = ltePci;
+            this.lteEarfcn = lteEarfcn;
+            this.lteBands = lteBands;
+            this.lteBandwidth = lteBandwidth;
+            this.lteRssi = lteRssi;
+            this.lteRsrp = lteRsrp;
+            this.lteRsrq = lteRsrq;
+            this.lteRssnr = lteRssnr;
+            this.lteTimingAdvance = lteTimingAdvance;
+            this.nrTac = nrTac;
+            this.nrNci = nrNci;
+            this.nrPci = nrPci;
+            this.nrArfcn = nrArfcn;
+            this.nrBands = nrBands;
+            this.nrSsRsrp = nrSsRsrp;
+            this.nrSsRsrq = nrSsRsrq;
+            this.nrSsSinr = nrSsSinr;
+            this.nrCsiRsrp = nrCsiRsrp;
+            this.nrCsiRsrq = nrCsiRsrq;
+            this.nrCsiSinr = nrCsiSinr;
+            this.nrTimingAdvance = nrTimingAdvance;
+        }
+
+        String operatorNumeric() {
+            return mcc + mnc;
+        }
     }
 
     private static boolean active() {

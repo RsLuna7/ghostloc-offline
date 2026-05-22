@@ -12,6 +12,11 @@ final class SettingsStore {
     static final String WIFI_SHIELD = "wifi_shield";
     static final String CELL_SHIELD = "cell_shield";
     static final String MOCK_SHIELD = "mock_shield";
+    static final String CELL_MCC = "cell_mcc";
+    static final String CELL_MNC = "cell_mnc";
+    static final String CELL_COUNTRY_ISO = "cell_country_iso";
+    static final String CELL_OPERATOR_NAME = "cell_operator_name";
+    static final String CELL_ENABLE_NR = "cell_enable_nr";
     static final String MOVEMENT = "movement";
     static final String STARTED_AT = "started_at";
     static final String FAVORITES = "favorites";

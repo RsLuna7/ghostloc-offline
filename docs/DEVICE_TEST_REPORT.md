@@ -159,6 +159,40 @@ Result:
   verified service-path hook because the public API calls traverse binder and hit
   the service hooks above.
 
+### Phase 3 Structured CellInfo Synthesis
+
+Test coordinate:
+
+```text
+35.689500,139.691700
+```
+
+The APKs were rebuilt, reinstalled, and the device was rebooted so the updated
+module code would reload into the target processes.
+
+Runtime telephony evidence:
+
+```text
+GhostLocProbe: public_cells=LTE reg=true status=1 mcc=440 mnc=10 ci=156030181 pci=244 tac=46053 earfcn=1773 rsrp=-99 rsrq=-8 rssnr=148 ta=15 | NR reg=false status=2 mcc=440 mnc=10 nci=12021270607 pci=414 tac=6401 nrarfcn=641682 ssRsrp=-102 ssRsrq=-13 ssSinr=163
+GhostLocProbe: public_service_state=state=0 roaming=false operator=44010 alpha=NTT DOCOMO regs=2
+GhostLocModule: cell callback android.telephony.TelephonyManager#requestCellInfoUpdate(java.util.concurrent.Executor,android.telephony.TelephonyManager$CellInfoCallback):void
+GhostLocProbe: network_type=20 data_type=20 voice_type=13 phone_type=1 operator=44010 operator_name=NTT DOCOMO country=jp roaming=false service_numeric=44010 service_alpha=NTT DOCOMO cells=2
+GhostLocProbe: cell_details=LTE reg=true status=1 mcc=440 mnc=10 ci=156030181 pci=244 tac=46053 earfcn=1773 rsrp=-99 rsrq=-8 rssnr=148 ta=15 | NR reg=false status=2 mcc=440 mnc=10 nci=12021270607 pci=414 tac=6401 nrarfcn=641682 ssRsrp=-102 ssRsrq=-13 ssSinr=163
+GhostLocProbe: cellinfo_callback=LTE reg=true status=1 mcc=440 mnc=10 ci=156030181 pci=244 tac=46053 earfcn=1773 rsrp=-99 rsrq=-8 rssnr=148 ta=15 | NR reg=false status=2 mcc=440 mnc=10 nci=12021270607 pci=414 tac=6401 nrarfcn=641682 ssRsrp=-102 ssRsrq=-13 ssSinr=163
+```
+
+Result:
+
+- `TelephonyManager.getAllCellInfo()` returned two synthetic cells on-device.
+- `requestCellInfoUpdate()` callback returned the same synthetic LTE/NR profile.
+- operator code/name, country ISO, `ServiceState`, and `CellInfo` identity all
+  agreed on `44010 / NTT DOCOMO / jp`.
+- `getNetworkType()` and `getDataNetworkType()` moved to `20` (`NR`) while
+  `getVoiceNetworkType()` stayed at `13` (`LTE`), matching the synthesized
+  voice/data split.
+- no `GhostLocModule` exception, error, failed, or skipped lines were present in
+  the captured telephony log evidence.
+
 ### Module Load
 
 ```text
@@ -201,6 +235,8 @@ Pass for the currently implemented public API surfaces:
 - `Settings.Secure.mock_location` returns `0`.
 - Wi-Fi identity and scan results are cleaned.
 - Basic telephony fields are cleaned.
+- Structured LTE/NR `CellInfo` synthesis is active.
+- `requestCellInfoUpdate()` synthetic callback path is active.
 - Provider status and Geocoder are spoofed.
 - Command bridge is observed without LSPosed error stacks after the read-only
   remote preferences fix.
@@ -211,7 +247,6 @@ Pass for the currently implemented public API surfaces:
   by Android 15 hidden API filtering
 - separate ordinary third-party demo app validation
 - module disable/restore-real-location validation
-- non-empty structured `CellInfo` objects
 - GNSS/NMEA callbacks
 - vendor fused-location process behavior
 - multi-device / multi-ROM test matrix

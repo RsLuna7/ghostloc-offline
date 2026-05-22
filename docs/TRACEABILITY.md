@@ -283,6 +283,85 @@ Remaining Phase 1 limits found:
 - a separate third-party demo app and disable/restore behavior check are still
   useful follow-up acceptance tests
 
+### Phase 3 - Add structured CellInfo synthesis
+
+Purpose:
+
+- implement Phase 3 of `docs/REPLICATION_PLAN.md`
+- replace the previous empty `getAllCellInfo()` result with deterministic
+  synthetic LTE/NR state
+- keep telephony spoofing internally consistent across operator, country,
+  `ServiceState`, `getAllCellInfo()`, and `requestCellInfoUpdate()`
+
+Main files:
+
+```text
+app/src/main/java/dev/ghostloc/offline/GhostLocModule.java
+app/src/main/java/dev/ghostloc/offline/SettingsStore.java
+probe-app/src/main/java/dev/ghostloc/probe/ProbeActivity.java
+docs/DEVICE_TEST_REPORT.md
+docs/REPLICATION_PLAN.md
+```
+
+Implemented:
+
+- `CellProfile` synthesis derived deterministically from the selected coordinate
+- optional telephony override storage keys:
+  - `cell_mcc`
+  - `cell_mnc`
+  - `cell_country_iso`
+  - `cell_operator_name`
+  - `cell_enable_nr`
+- coordinate-to-carrier preset mapping for:
+  - Japan
+  - China
+  - Korea
+  - UK
+  - US
+  - `GhostLoc` fallback
+- reflected construction and field population for:
+  - `CellInfoLte`
+  - `CellIdentityLte`
+  - `CellSignalStrengthLte`
+  - `CellInfoNr`
+  - `CellIdentityNr`
+  - `CellSignalStrengthNr`
+- defensive base-cell metadata population through hidden
+  `setRegistered` / `setTimeStamp` / `setCellConnectionStatus` with direct-field
+  fallback
+- `requestCellInfoUpdate(Executor, CellInfoCallback)` callback interception and
+  synthetic callback delivery
+- `ServiceState` consistency fill for:
+  - operator alpha/numeric
+  - voice/data registration state
+  - `NetworkRegistrationInfo` voice/data entries
+- probe-app structured telephony output for:
+  - LTE cell identity/signal
+  - NR cell identity/signal
+  - `ServiceState`
+  - `requestCellInfoUpdate()` callback
+
+Real-device evidence:
+
+```text
+GhostLocProbe: public_cells=LTE reg=true status=1 mcc=440 mnc=10 ci=156030181 pci=244 tac=46053 earfcn=1773 rsrp=-99 rsrq=-8 rssnr=148 ta=15 | NR reg=false status=2 mcc=440 mnc=10 nci=12021270607 pci=414 tac=6401 nrarfcn=641682 ssRsrp=-102 ssRsrq=-13 ssSinr=163
+GhostLocProbe: public_service_state=state=0 roaming=false operator=44010 alpha=NTT DOCOMO regs=2
+GhostLocModule: cell callback android.telephony.TelephonyManager#requestCellInfoUpdate(java.util.concurrent.Executor,android.telephony.TelephonyManager$CellInfoCallback):void
+GhostLocProbe: network_type=20 data_type=20 voice_type=13 phone_type=1 operator=44010 operator_name=NTT DOCOMO country=jp roaming=false service_numeric=44010 service_alpha=NTT DOCOMO cells=2
+GhostLocProbe: cellinfo_callback=LTE reg=true status=1 mcc=440 mnc=10 ci=156030181 pci=244 tac=46053 earfcn=1773 rsrp=-99 rsrq=-8 rssnr=148 ta=15 | NR reg=false status=2 mcc=440 mnc=10 nci=12021270607 pci=414 tac=6401 nrarfcn=641682 ssRsrp=-102 ssRsrq=-13 ssSinr=163
+```
+
+Phase 3 notes:
+
+- Android 15 public SDK stubs do not expose the hidden constructors and fields
+  needed for `CellInfo` synthesis, so the implementation relies on runtime
+  reflection and fails closed when signatures move
+- on the OnePlus7 Android 15 test device, the no-arg constructor plus field
+  population path was sufficient; Parcel-based fallback is still not needed
+  there
+- the telephony profile is now internally consistent for the owned probe path,
+  but broad third-party app compatibility is still a later acceptance task
+
 ## Current Build Artifacts
 
 ```text
@@ -302,7 +381,6 @@ Known gaps:
 - app-side direct hidden `ILocationManager` reflection is filtered on Android 15
 - broader third-party app service-path compatibility checks
 - vendor fused-location implementations
-- structured non-empty `CellInfo` synthesis
 - GNSS, NMEA, AGPS, and satellite status synthesis
 - route-management UI equivalent to a polished product
 - broader Android/ROM compatibility matrix
