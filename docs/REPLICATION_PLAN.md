@@ -1,7 +1,7 @@
-# Remaining Replication Plan
+# Validation and Compatibility Plan
 
-This plan tracks the remaining work needed to move from the current verified
-offline MVP toward a more complete original-equivalent feature set.
+This plan now tracks the remaining compatibility and validation follow-up work
+after the owned-device implementation path reached completion.
 
 ## Current Completion
 
