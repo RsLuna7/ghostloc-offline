@@ -6,3 +6,4 @@ com.xiaomi.location.fused
 com.android.bluetooth
 dev.ghostloc.offline
 dev.ghostloc.probe
+dev.ghostloc.demo

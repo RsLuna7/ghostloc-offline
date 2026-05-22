@@ -931,7 +931,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                 + "  Route points: " + routeCount
                 + "  Vendor hooks: " + prefs.getBoolean(SettingsStore.VENDOR_HOOKS_ENABLED, true)
                 + "\nLast probe: " + (probeAt == 0L ? "none" : (probeOk ? "PASS " : "FAIL ") + stamp(probeAt))
-                + "\nExpected scope: system_server, android, com.android.location.fused, dev.ghostloc.probe"
+                + "\nExpected scope: system_server, android, com.android.location.fused, dev.ghostloc.probe, dev.ghostloc.demo"
                 + "\nOptional scope: com.oplus.location, com.xiaomi.location.fused"
                 + "\nProbe report:\n" + probeReport
                 + "\nRecent hits:\n" + hits

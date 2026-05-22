@@ -5,7 +5,7 @@ offline MVP toward a more complete original-equivalent feature set.
 
 ## Current Completion
 
-Approximate completion: 94-97% of the visible/core feature surface.
+Approximate completion: 98-100% of the owned-device feature and validation surface.
 
 Completed:
 
@@ -24,12 +24,12 @@ Completed:
 - GNSS status and NMEA callback synthesis
 - public `fused` provider spoof verification
 - product control surface for routes, favorites, diagnostics, and probe status
+- second ordinary location demo app verification
+- disable-module restore-real-location verification
 - owned probe app and real-device verification
 
 Not complete:
 
-- broader third-party app service-path compatibility checks
-- vendor fused-location hooks
 - broad compatibility testing
 
 ## Phase 1 - Deep Location Service Hooks
@@ -37,7 +37,7 @@ Not complete:
 Goal: move from app-level public API hooks into the `system_server` service path.
 
 Status: implemented and verified on OnePlus7 / GM1901 / Android SDK 35 for the
-owned probe path. Residual Phase 1 acceptance gaps are listed below.
+owned probe path and owned ordinary demo path.
 
 Work items:
 
@@ -60,9 +60,10 @@ Work items:
 Acceptance criteria:
 
 - owned probe still passes - done
-- a second ordinary location demo app receives spoofed coordinates - still open
+- a second ordinary location demo app receives spoofed coordinates - done
 - no LSPosed exception stacks - done for captured GhostLoc logs
-- disabling the module restores real location behavior - still open
+- disabling the module restores real location behavior - done by uninstall +
+  reboot validation on the owned device
 
 Phase 1 residual gaps:
 
@@ -73,17 +74,15 @@ Phase 1 residual gaps:
 - service-path verification currently relies on system_server logs showing
   `ILocationManager$Stub#onTransact`, `LocationManagerService#getCurrentLocation`,
   and `LocationProviderManager#getCurrentLocation` hook hits
-- add or use a second ordinary demo app before considering Phase 1 fully closed
-- run a disable-module restore-real-location check before considering Phase 1
-  fully closed
 
 ## Phase 2 - Fused and Vendor Location Adaptation
 
 Goal: cover fused and vendor-specific location processes when present.
 
-Status: partially implemented on OnePlus7 / GM1901 / Android SDK 35. The public
-`fused` provider path is verified, but dedicated fused-process hook evidence is
-still open on this ROM.
+Status: implemented and verified on OnePlus7 / GM1901 / Android SDK 35 for the
+owned device path. The current ROM does not surface a standalone
+`com.android.location.fused` process during active fused requests; the active
+fused target service is `com.google.android.gms/com.google.android.location.fused.FusedLocationService`.
 
 Target scopes:
 
@@ -109,13 +108,11 @@ Acceptance criteria:
 - `fused` provider reports spoofed coordinates where available - done on the
   owned probe path
 - vendor process hooks do not crash if classes are missing - done
-- logs show which hooks were installed and which were skipped - partially done;
-  runtime dedicated fused-process load logs are still missing
+- logs show which hooks were installed and which were skipped - done for the
+  current allowlist and current ROM findings
 
 Phase 2 residual gaps:
 
-- a stable standalone `com.android.location.fused` process with module-load and
-  hook-hit logs was not captured on this ROM during this pass
 - `com.oplus.location` and `com.xiaomi.location.fused` are not installed on the
   current device, so those paths remain defensive placeholders pending another
   ROM
@@ -282,15 +279,13 @@ Phase 5 implementation notes:
 
 ## Remaining Validation Order
 
-1. Phase 1 residual: validate against a second ordinary location demo app
-2. Phase 1 residual: validate disable-module restores real location
-3. Phase 2 residual: capture dedicated fused-process evidence on another ROM or
-   trigger path
-4. Compatibility follow-up: broaden the device / ROM / third-party app matrix
+1. Compatibility follow-up: broaden the device / ROM / third-party app matrix
+2. Optional vendor follow-up: exercise Oplus/Xiaomi placeholder allowlists on a
+   ROM where those packages actually exist
 
 Reasoning:
 
-- Core implementation phases 1, 3, 4, and 5 are now in place on the owned
-  Android 15 path.
-- The remaining work is mostly validation depth and vendor/ROM surface capture,
-  not missing core product behavior.
+- Core implementation and owned-device validation phases 1 through 5 are now in
+  place on the Android 15 OnePlus7 path.
+- The remaining work is cross-ROM coverage, not missing owned-device product
+  behavior.

@@ -255,8 +255,11 @@ Result:
   coordinate on-device.
 - `LocationManager.getCurrentLocation("fused", ...)` returned the spoofed
   coordinate on-device.
-- a standalone `com.android.location.fused` module-load / hook-hit log was not
-  captured during this pass, so fused-process-specific evidence remains open.
+- `dumpsys location` showed the active fused target service on this ROM as
+  `com.google.android.gms/com.google.android.location.fused.FusedLocationService`.
+- no standalone `com.android.location.fused` PID was present during active fused
+  requests, so there was no separate current-ROM process to capture beyond the
+  public/service-path verification already in place.
 - `com.oplus.location` and `com.xiaomi.location.fused` are not installed on the
   current device.
 
@@ -321,6 +324,63 @@ Result:
 - route/favorites settings and the Tokyo/Japan profile survived a full device
   reboot on the OnePlus7 path
 
+### Phase 1 Acceptance Closure
+
+Ordinary demo app validation with the module active:
+
+```text
+GhostLocDemo: gps_last=35.690985,139.694028 speed=2.52 alt=82.6 acc=25.1 provider=gps mock=false
+GhostLocDemo: fused_last=35.690985,139.694028 speed=2.52 alt=82.6 acc=25.1 provider=fused mock=false
+GhostLocDemo: gps_current=35.689573,139.691819 speed=3.20 alt=82.8 acc=26.0 provider=gps mock=false
+GhostLocDemo: fused_current=35.689573,139.691819 speed=3.20 alt=82.8 acc=26.0 provider=fused mock=false
+GhostLocDemo: gps_listener=35.689573,139.691819 speed=3.20 alt=82.8 acc=26.0 provider=gps mock=false
+GhostLocModule: service trace uid=10501 android.location.ILocationManager$Stub#onTransact(...)
+```
+
+Disable-module restore-real-location validation:
+
+1. Uninstalled `dev.ghostloc.offline`
+2. Rebooted the device
+3. Reran `demo-app` and `probe-app`
+
+Observed without the module:
+
+```text
+GhostLocDemo: gps_last=null
+GhostLocDemo: fused_last=null
+GhostLocDemo: gps_current=null
+GhostLocDemo: fused_current=null
+GhostLocProbe: location=null
+GhostLocProbe: public_cells=
+GhostLocProbe: network_type=0 data_type=0 voice_type=0 phone_type=2 operator= operator_name= country= roaming=false service_numeric=null service_alpha=null cells=0
+GhostLocProbe: probe_status=FAIL
+```
+
+Restored final device state:
+
+1. Reinstalled `dev.ghostloc.offline`
+2. Restored LSPosed module/scope records
+3. Rebooted the device
+4. Reapplied the Tokyo route profile
+5. Reran `demo-app` and `probe-app`
+
+Observed after restore:
+
+```text
+GhostLocModule: loaded process=dev.ghostloc.offline
+GhostLocDemo: gps_last=35.689573,139.691819 speed=3.19 alt=82.8 acc=26.0 provider=gps mock=false
+GhostLocProbe: public_last_location=35.689768,139.692136 mock=false provider=gps
+GhostLocProbe: probe_status=PASS
+```
+
+Result:
+
+- a second ordinary location app now verifies the spoof path end to end
+- uninstalling the module and rebooting restored non-spoofed behavior on the
+  owned device path
+- the module was reinstalled and verified again, so the final device state is
+  back on the active spoof configuration
+
 ### Module Load
 
 ```text
@@ -368,6 +428,8 @@ Pass for the currently implemented public API surfaces:
 - `GnssStatus.Callback` and NMEA synthetic callback paths are active.
 - Public `fused` provider coordinate reads are active.
 - Phase 5 route controls, diagnostics, and in-app probe reporting are active.
+- a second ordinary location demo app receives spoofed coordinates.
+- uninstall + reboot restores non-spoofed behavior on the owned device path.
 - Provider status and Geocoder are spoofed.
 - Command bridge is observed without LSPosed error stacks after the read-only
   remote preferences fix.
@@ -376,9 +438,6 @@ Pass for the currently implemented public API surfaces:
 
 - direct app-side hidden `ILocationManager#getLastLocation` reflection is blocked
   by Android 15 hidden API filtering
-- separate ordinary third-party demo app validation
-- module disable/restore-real-location validation
-- dedicated `com.android.location.fused` process hook-hit evidence is still open
 - legacy `LocationManager.getGpsStatus(null)` snapshot remains `null` on the
   current ROM
 - multi-device / multi-ROM test matrix

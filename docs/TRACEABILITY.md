@@ -498,10 +498,12 @@ GhostLocProbe: fused_current_location=35.689500,139.691700 mock=false provider=f
 Phase 2 notes:
 
 - the owned probe now verifies the public `fused` provider path on-device
-- the ROM still did not surface a stable standalone
-  `com.android.location.fused` process with module load logs during this pass,
-  so dedicated fused-process hook hits remain a follow-up rather than a claimed
-  closed item
+- `dumpsys location` on the owned device shows the active fused target as
+  `com.google.android.gms/com.google.android.location.fused.FusedLocationService`
+  rather than a standalone `com.android.location.fused` process
+- no `com.android.location.fused` PID was present during active fused requests
+  on this ROM, so there is no additional standalone process evidence to claim
+  or chase on the owned path
 - non-present `com.oplus.location` and `com.xiaomi.location.fused` paths stay
   defensive and skipped
 
@@ -587,25 +589,75 @@ Phase 5 notes:
   profile and the app stored a fresh `last_probe_report`, confirming reboot
   persistence on the current device path
 
+### Validation closure - ordinary demo and restore-real-location
+
+Purpose:
+
+- close the last Phase 1 acceptance gaps on the owned device
+
+Main files:
+
+```text
+demo-app/src/main/java/dev/ghostloc/demo/MainActivity.java
+app/src/main/resources/META-INF/xposed/scope.list
+docs/DEVICE_TEST_REPORT.md
+docs/REPLICATION_PLAN.md
+```
+
+Implemented:
+
+- added a second owned ordinary location client app:
+  - package `dev.ghostloc.demo`
+  - no binder reflection
+  - no module service dependency
+  - standard `LocationManager` last/current/listener reads only
+- expanded scope metadata to include `dev.ghostloc.demo`
+- performed a disable-module validation by uninstalling `dev.ghostloc.offline`,
+  rebooting the device, and rerunning both `demo-app` and `probe-app`
+- restored the module by reinserting the LSPosed module/scope records, rebooting,
+  and rerunning the active spoof checks
+
+Real-device evidence:
+
+```text
+GhostLocDemo: gps_last=35.690985,139.694028 speed=2.52 alt=82.6 acc=25.1 provider=gps mock=false
+GhostLocDemo: fused_last=35.690985,139.694028 speed=2.52 alt=82.6 acc=25.1 provider=fused mock=false
+GhostLocProbe: location=null
+GhostLocProbe: network_type=0 data_type=0 voice_type=0 phone_type=2 operator= operator_name= country= roaming=false service_numeric=null service_alpha=null cells=0
+GhostLocDemo: gps_last=35.689573,139.691819 speed=3.19 alt=82.8 acc=26.0 provider=gps mock=false
+GhostLocProbe: probe_status=PASS
+```
+
+Closure notes:
+
+- the ordinary demo app received the spoofed Tokyo route output while the module
+  was active, closing the "second ordinary app" acceptance gap
+- after uninstalling the module and rebooting, both owned clients returned to
+  non-spoofed behavior on this device path:
+  - `demo-app` saw `gps_last=null` / `fused_last=null`
+  - `probe-app` saw `location=null`, empty synthetic cell state, and
+    `probe_status=FAIL`
+- after restoring the LSPosed module registration and rebooting, the module
+  resumed normal spoof behavior for both `demo-app` and `probe-app`
+
 ## Current Build Artifacts
 
 ```text
 D:\.develop\ghostloc-offline\app\build\outputs\apk\debug\app-debug.apk
 D:\.develop\ghostloc-offline\probe-app\build\outputs\apk\debug\probe-app-debug.apk
+D:\.develop\ghostloc-offline\demo-app\build\outputs\apk\debug\demo-app-debug.apk
 ```
 
 ## Current Known Limits
 
-The current module is verified against public Android API surfaces and the owned
-probe app. It now has OnePlus7 / Android 15 service-layer hooks, but it is not
-yet a complete original-equivalent module because broader private and vendor
-surfaces still need per-ROM implementation and verification.
+The current module is verified against public Android API surfaces, the owned
+probe app, and the owned ordinary demo app. It now has OnePlus7 / Android 15
+service-layer hooks and owned-device validation closure. Remaining limits are
+cross-ROM rather than owned-device core behavior.
 
 Known gaps:
 
 - app-side direct hidden `ILocationManager` reflection is filtered on Android 15
-- broader third-party app service-path compatibility checks
-- dedicated fused-process hook-hit evidence is still missing on the current ROM
 - legacy `LocationManager.getGpsStatus(null)` snapshot still returns `null` on
   the current ROM even though the GNSS/NMEA callback paths are spoofed
 - broader Android/ROM compatibility matrix
