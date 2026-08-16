@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="4dp"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:text="@string/section_location" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/latInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_lat"
+                android:inputType="numberDecimal|numberSigned"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/lonInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_lon"
+                android:inputType="numberDecimal|numberSigned"
+                android:singleLine="true"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/speedInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_speed"
+                android:inputType="numberDecimal"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/altitudeInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_altitude"
+                android:inputType="numberDecimal|numberSigned"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/accuracyInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_accuracy"
+                android:inputType="numberDecimal"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/bearingInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_bearing"
+                android:inputType="numberDecimal"
+                android:singleLine="true"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="14dp"
+            android:paddingBottom="4dp"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:text="@string/section_policy" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <CheckBox
+                android:id="@+id/wifiShieldCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_wifi_shield" />
+
+            <CheckBox
+                android:id="@+id/cellShieldCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_cell_shield" />
+
+            <CheckBox
+                android:id="@+id/mockShieldCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_mock_shield" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <CheckBox
+                android:id="@+id/movementCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_movement" />
+
+            <CheckBox
+                android:id="@+id/nrCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_nr" />
+
+            <CheckBox
+                android:id="@+id/nmeaCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_nmea" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <CheckBox
+                android:id="@+id/agpsCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_agps" />
+
+            <CheckBox
+                android:id="@+id/vendorHooksCheck"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="12sp"
+                android:text="@string/check_vendor_hooks" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="14dp"
+            android:paddingBottom="4dp"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:text="@string/section_cell_jitter" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/mccInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_mcc"
+                android:inputType="text"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/mncInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_mnc"
+                android:inputType="text"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/countryInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_country"
+                android:inputType="text"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/operatorInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_operator"
+                android:inputType="text"
+                android:singleLine="true"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/gnssSatInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_gnss_sat"
+                android:inputType="number"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/speedVariationInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_speed_variation"
+                android:inputType="numberDecimal"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/accuracyJitterInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_accuracy_jitter"
+                android:inputType="numberDecimal"
+                android:singleLine="true"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/altitudeJitterInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/hint_altitude_jitter"
+                android:inputType="numberDecimal"
+                android:singleLine="true"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

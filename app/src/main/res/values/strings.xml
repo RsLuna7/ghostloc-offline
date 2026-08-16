@@ -1,4 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">GhostLoc 离线定位</string>
-    <string name="module_description">仅用于自有测试设备的离线定位控制模块。</string>
+    <string name="module_description">离线定位控制模块（自有测试设备用途）</string>
+
+    <!-- Status bar -->
+    <string name="service_not_connected">模块服务：未连接</string>
+    <string name="status_idle">状态：空闲</string>
+    <string name="status_active">状态：定位伪装已启用</string>
+    <string name="status_active_paused">状态：定位伪装已启用（路线已暂停）</string>
+    <string name="status_active_moving">状态：定位伪装已启用（路线移动中）</string>
+
+    <!-- Tabs -->
+    <string name="tab_map">地图</string>
+    <string name="tab_params">参数</string>
+    <string name="tab_route">路线/收藏</string>
+    <string name="tab_diagnostics">诊断</string>
+
+    <!-- Map -->
+    <string name="search_hint">搜索地点</string>
+    <string name="search_button">搜索</string>
+    <string name="tile_source_label">地图源</string>
+    <string name="tile_source_amap_road">高德地图</string>
+    <string name="tile_source_amap_satellite">高德卫星</string>
+    <string name="tile_source_osm">OpenStreetMap</string>
+    <string name="pickup_correct">拾取坐标纠偏 (GCJ-02→WGS-84)</string>
+    <string name="map_hint">单击地图仅放点，长按地图会放点并立即开始。</string>
+    <string name="button_start">开始</string>
+    <string name="button_stop">停止</string>
+    <string name="button_save">保存配置</string>
+    <string name="toast_started">已开始定位伪装</string>
+    <string name="toast_stopped">已停止定位伪装</string>
+    <string name="toast_saved">已保存配置</string>
+    <string name="toast_invalid_config">配置值无效</string>
+
+    <!-- Search -->
+    <string name="toast_searching">正在搜索…</string>
+    <string name="toast_search_empty_input">请输入地点关键字</string>
+    <string name="toast_search_no_result">未找到地点，请直接点地图或手填坐标</string>
+    <string name="toast_search_failed">搜索失败，请直接点地图或手填坐标</string>
+    <string name="toast_search_found">已定位到搜索结果</string>
+    <string name="toast_no_geocoder">当前系统未提供地点搜索服务，可在诊断页配置高德搜索 Key</string>
+
+    <!-- Params -->
+    <string name="section_location">位置</string>
+    <string name="hint_lat">纬度</string>
+    <string name="hint_lon">经度</string>
+    <string name="hint_speed">速度 m/s</string>
+    <string name="hint_altitude">海拔 m</string>
+    <string name="hint_accuracy">精度 m</string>
+    <string name="hint_bearing">方向角</string>
+    <string name="section_policy">策略</string>
+    <string name="check_wifi_shield">Wi-Fi 屏蔽</string>
+    <string name="check_cell_shield">基站屏蔽</string>
+    <string name="check_mock_shield">Mock 标记屏蔽</string>
+    <string name="check_movement">路线移动</string>
+    <string name="check_nr">启用 5G/NR</string>
+    <string name="check_nmea">启用 NMEA 回调</string>
+    <string name="check_agps">上报 AGPS</string>
+    <string name="check_vendor_hooks">启用厂商/Fused Hook</string>
+    <string name="section_cell_jitter">蜂窝与抖动</string>
+    <string name="hint_mcc">MCC</string>
+    <string name="hint_mnc">MNC</string>
+    <string name="hint_country">国家/地区</string>
+    <string name="hint_operator">运营商</string>
+    <string name="hint_gnss_sat">GNSS 星数</string>
+    <string name="hint_speed_variation">速度波动 0-0.75</string>
+    <string name="hint_accuracy_jitter">精度抖动 m</string>
+    <string name="hint_altitude_jitter">海拔抖动 m</string>
+
+    <!-- Route & favorites -->
+    <string name="section_route">路线</string>
+    <string name="check_route_loop">循环路线</string>
+    <string name="check_route_auto_bearing">自动方向角</string>
+    <string name="hint_route_json">路线 JSON</string>
+    <string name="button_add_point">添加点位</string>
+    <string name="button_save_route">保存路线</string>
+    <string name="button_use_route_start">使用起点</string>
+    <string name="button_clear_route">清空路线</string>
+    <string name="button_pause">暂停</string>
+    <string name="button_resume">继续</string>
+    <string name="section_favorites">收藏</string>
+    <string name="hint_favorites_json">收藏 JSON</string>
+    <string name="button_add_favorite">加入当前点</string>
+    <string name="button_save_favorites">保存 JSON</string>
+    <string name="button_use_last_favorite">使用最近项</string>
+    <string name="button_clear_favorites">清空收藏</string>
+    <string name="toast_route_saved">已保存路线</string>
+    <string name="toast_route_point_saved">已保存路线点</string>
+    <string name="toast_route_invalid">当前路线内容无效</string>
+    <string name="toast_route_json_invalid">路线 JSON 格式无效</string>
+    <string name="toast_route_empty">当前没有路线</string>
+    <string name="toast_route_cleared">已清空路线</string>
+    <string name="toast_route_paused">路线已暂停</string>
+    <string name="toast_route_resumed">路线已继续</string>
+    <string name="toast_route_need_start">请先启动路线移动</string>
+    <string name="toast_not_active">当前未启动定位伪装</string>
+    <string name="toast_favorite_saved">已保存收藏列表</string>
+    <string name="toast_favorite_point_saved">已保存收藏点</string>
+    <string name="toast_favorites_invalid">当前收藏内容无效</string>
+    <string name="toast_favorites_json_invalid">收藏 JSON 格式无效</string>
+    <string name="toast_favorites_empty">暂无收藏点</string>
+    <string name="toast_favorites_cleared">已清空收藏</string>
+
+    <!-- Diagnostics -->
+    <string name="section_diagnostics">诊断</string>
+    <string name="button_refresh">刷新</string>
+    <string name="button_reload">重载</string>
+    <string name="button_launch_probe">仅启动验证</string>
+    <string name="button_apply_and_probe">应用并验证</string>
+    <string name="button_reset">恢复默认</string>
+    <string name="hint_amap_key">高德 Web 服务 Key（可选，用于搜索）</string>
+    <string name="button_save_key">保存 Key</string>
+    <string name="toast_key_saved">已保存搜索 Key</string>
+    <string name="toast_probe_missing">验证应用未安装</string>
+    <string name="toast_reset_done">已恢复默认配置</string>
+    <string name="diag_framework_service">框架服务：%1$s</string>
+    <string name="diag_map_source">地图源：%1$s</string>
+    <string name="diag_enabled">已启用：%1$b  路线暂停：%2$b  最近状态：%3$s</string>
+    <string name="diag_recent_process">最近进程：%1$s</string>
+    <string name="diag_counts">收藏数量：%1$d  路线点数：%2$d  厂商 Hook：%3$b</string>
+    <string name="diag_last_probe">最近验证：%1$s</string>
+    <string name="diag_recommended_scope">建议作用域：system_server、android、com.android.location.fused、dev.ghostloc.probe、dev.ghostloc.demo</string>
+    <string name="diag_optional_scope">可选作用域：com.oplus.location、com.xiaomi.location.fused</string>
+    <string name="diag_probe_report">验证报告：\n%1$s</string>
+    <string name="diag_recent_hits">最近命中：\n%1$s</string>
+    <string name="diag_recent_errors">最近错误：\n%1$s</string>
 </resources>
