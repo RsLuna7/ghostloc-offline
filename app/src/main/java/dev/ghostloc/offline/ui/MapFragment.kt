@@ -13,14 +13,11 @@ import dev.ghostloc.offline.R
 import dev.ghostloc.offline.core.GeoMath
 import dev.ghostloc.offline.core.Prefs
 import dev.ghostloc.offline.databinding.FragmentMapBinding
-import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
-import java.io.File
 import java.util.Locale
 
 /**
@@ -49,14 +46,6 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
         val binding = FragmentMapBinding.inflate(inflater, container, false)
         this.binding = binding
         val context = requireContext()
-
-        // Persistent tile cache inside app storage: survives cache clears and
-        // needs no storage permission.
-        Configuration.getInstance().apply {
-            userAgentValue = context.packageName
-            osmdroidBasePath = File(context.filesDir, "osmdroid")
-            osmdroidTileCache = File(context.filesDir, "osmdroid/tiles")
-        }
 
         val map = binding.mapView
         mapView = map
@@ -160,9 +149,15 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
         val map = mapView ?: return
         val source = TileSources.byId(ConfigDraft.tileSourceId)
         val next = source.factory()
+        android.util.Log.i(
+            "GhostLocApp",
+            "applyTileSource id=${source.id} next=${next.name()} current=${map.tileProvider.tileSource.name()}" +
+                " cache=" + org.osmdroid.config.Configuration.getInstance().osmdroidTileCache,
+        )
         if (map.tileProvider.tileSource.name() != next.name()) {
             map.setTileSource(next)
         }
+        map.invalidate()
         updateMarker()
     }
 

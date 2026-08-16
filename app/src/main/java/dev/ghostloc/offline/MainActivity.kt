@@ -95,6 +95,14 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
         ModuleApplication.addServiceStateListener(this, true)
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_AUTO_APPLY, false)) {
+            applyIntentSettings(service != null)
+        }
+    }
+
     override fun onStop() {
         ModuleApplication.removeServiceStateListener(this)
         super.onStop()
