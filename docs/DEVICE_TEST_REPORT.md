@@ -441,3 +441,28 @@ Pass for the currently implemented public API surfaces:
 - legacy `LocationManager.getGpsStatus(null)` snapshot remains `null` on the
   current ROM
 - multi-device / multi-ROM test matrix
+
+## 2026-08-16 — Kotlin rewrite + live-sync regression
+
+Device: OnePlus 7 / GM1901 / Android 15 (SDK 35) / Vector (LSPosed API 100).
+
+| Check | Result |
+| --- | --- |
+| Module load + service bind | `loaded process=…`, `service bound framework=LSPosed api=100` |
+| Static point via intent (Wuhan 30.5728,114.3051) | `public_last_location=30.572800,114.305099` PASS |
+| Live switch to Beijing (no reboot) | `location=39.904202,116.407402` |
+| Live switch to Shenzhen (no reboot) | demo-app `gps_last=22.543100,114.057899` |
+| probe full run (Shenzhen) | PASS; WiFi masked (`ssid="GhostLoc"`); cells = CN preset LTE+NR |
+| Stop | probe `location=null` / FAIL (real behavior restored) |
+| Post-reboot persistence | state file survives; spoof resumes with last settings |
+| Map long-press pick + GCJ-02 correction | picked point landed in params tab (35.700164,139.682203) |
+| UI insets | first text at y≈110 (below status bar); buttons clear of gesture area |
+
+Notes:
+
+- live switching works because the bridge now persists state from inside
+  system_server (see TRACEABILITY 2026-08-16); no reboot between city switches
+- `getCurrentLocation` returned null during spoofing on this ROM; apps fell
+  back to `getLastKnownLocation` which served live spoofed values
+- tile download could not be visually verified: the device Wi-Fi sat behind
+  an unauthenticated captive portal (SNTP also timed out)

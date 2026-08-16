@@ -661,3 +661,66 @@ Known gaps:
 - legacy `LocationManager.getGpsStatus(null)` snapshot still returns `null` on
   the current ROM even though the GNSS/NMEA callback paths are spoofed
 - broader Android/ROM compatibility matrix
+
+## 2026-08-16 — Kotlin rewrite regression, live-sync architecture, Material 3 UI
+
+### Real-device regression (Kotlin rewrite)
+
+- module loading, service bind (`LSPosed api=100`), system_server deep hook
+  hits all verified on device after the rewrite
+- probe PASS with Tokyo route profile; demo-app received spoofed output with
+  movement drift and jitter; stop restored real behavior (probe FAIL/null)
+- map tab interactions verified: long-press pick with GCJ-02 correction fed
+  the params tab (35.700164,139.682203 observed after a map long-press)
+- UI inset fix: Android 15 enforced edge-to-edge put the status text under
+  the system bar and the bottom buttons under the gesture area; fixed with an
+  explicit WindowInsets listener on the root layout (t=79 verified by pixels;
+  uiautomator dumps were stale and misleading during diagnosis)
+
+### Root cause of "started but position unchanged"
+
+Three independent faults stacked:
+
+1. The LSPosed/Vector scope table lacked the module's own package, so the
+   module never injected into the app process and the command bridge never
+   fired ("bridge command sent" only meant the reflection invoke returned).
+2. On Vector, hook-side remote preferences are read-only, and UI-side service
+   preference writes land in the config WAL which the daemon never reads
+   (daemon loads the main database once at boot). Every UI write was
+   therefore invisible to hooks; the engine kept serving the last
+   checkpointed state.
+3. Module APK reinstalls change `/data/app` paths while the framework keeps
+   injecting the path recorded at boot, so reinstalls without a reboot (and
+   `modules.apk_path` refresh) silently pinned old code.
+
+### Live-sync architecture
+
+- Every UI commit now writes the local `settings` xml and sends a full `sync`
+  command through `LocationManager.sendExtraCommand`.
+- `LocationManagerService#sendExtraCommand` is hooked in system_server:
+  `Bridge.handle` persists the state to `/data/misc/ghostloc/state.properties`
+  (system_server-only access) and skips the original call.
+- system_server location hooks answer all apps from that file; client-side
+  location spoofing was removed in favor of binder answers.
+- Verified live switching without reboot: Wuhan 30.5728/114.3051 → Beijing
+  39.9042/116.4074 → Shenzhen 22.5431/114.0579, observed immediately in both
+  probe-app and unscoped demo-app.
+- Known gap: `getCurrentLocation` returns null while spoofing (apps fall back
+  to `getLastKnownLocation`/listeners); client-only hooks (GNSS/NMEA/Wi-Fi/
+  cell settings) apply after target-app restart.
+
+### Device-side state changes (validation device)
+
+- scope additions: `dev.ghostloc.offline`, restore `dev.ghostloc.demo`
+- GhostMapX module disabled in the framework DB (conflicts with this module)
+- `scripts/device/99ghostloc.sh` installed as a Magisk `service.d` script:
+  periodic `PRAGMA wal_checkpoint(PASSIVE)` on the framework config DB so
+  service-channel writes stay visible to the boot-time preference fallback
+
+### Material 3 UI refresh (0.3.0)
+
+- teal Material 3 theme, card sections, Material switches, styled button
+  hierarchy (filled 开始 / outlined 停止 / text secondary), collapsible
+  advanced settings, adaptive launcher icon
+- insets fix retained; four-tab structure unchanged; pixel-verified rendering
+  on device (header band #93E9D6 across all tabs)

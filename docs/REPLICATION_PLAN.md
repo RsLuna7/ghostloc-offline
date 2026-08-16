@@ -3,6 +3,11 @@
 This plan now tracks the remaining compatibility and validation follow-up work
 after the owned-device implementation path reached completion.
 
+> 2026-08-16 update: the preference transport was redesigned (live sync via
+> the system_server bridge, see TRACEABILITY). Phases 1–5 below describe the
+> original implementation path and are kept as historical record; their
+> acceptance evidence remains valid.
+
 ## Current Completion
 
 Approximate completion: 98-100% of the owned-device feature and validation surface.
