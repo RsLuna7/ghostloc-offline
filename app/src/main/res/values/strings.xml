@@ -1,5 +1,4 @@
 <resources>
-    <string name="app_name">GhostLoc Offline</string>
-    <string name="module_description">Offline location control module for owned test devices.</string>
+    <string name="app_name">GhostLoc 离线定位</string>
+    <string name="module_description">仅用于自有测试设备的离线定位控制模块。</string>
 </resources>
-

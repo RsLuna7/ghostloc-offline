@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.location.Address;
+import android.location.Geocoder;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.text.InputType;
@@ -24,15 +26,14 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.events.MapEventsReceiver;
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase;
+import org.osmdroid.tileprovider.tilesource.TileSourcePolicy;
+import org.osmdroid.util.MapTileIndex;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
 
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -95,6 +96,27 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
             SettingsStore.LAST_STATUS
     };
 
+    private static final OnlineTileSourceBase GAODE_ROAD_TILE_SOURCE = new OnlineTileSourceBase(
+            "UsbWorldTileRelayV3",
+            3,
+            19,
+            256,
+            ".png",
+            new String[]{
+                    "http://127.0.0.1:18765/world-tile-v3?x="
+            },
+            "USB Relay",
+            new TileSourcePolicy(2, 0)
+    ) {
+        @Override
+        public String getTileURLString(long mapTileIndex) {
+            return getBaseUrl()
+                    + MapTileIndex.getX(mapTileIndex)
+                    + "&y=" + MapTileIndex.getY(mapTileIndex)
+                    + "&z=" + MapTileIndex.getZoom(mapTileIndex);
+        }
+    };
+
     private XposedService service;
     private MapView mapView;
     private Marker marker;
@@ -134,6 +156,8 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Configuration.getInstance().setUserAgentValue(getPackageName());
+        Configuration.getInstance().setOsmdroidBasePath(getCacheDir());
+        Configuration.getInstance().setOsmdroidTileCache(getCacheDir());
         setContentView(buildUi());
         requestRuntimePermissions();
         loadSettings();
@@ -177,8 +201,8 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     public void onServiceStateChanged(XposedService service) {
         this.service = service;
         runOnUiThread(() -> {
-            serviceStatus.setText(service == null ? "Module service: not connected"
-                    : "Module service: " + service.getFrameworkName() + " API " + service.getApiVersion());
+            serviceStatus.setText(service == null ? "模块服务：未连接"
+                    : "模块服务：" + service.getFrameworkName() + " API " + service.getApiVersion());
             loadSettings();
             if (pendingAutoApply && service != null) {
                 applyIntentSettings(true);
@@ -191,22 +215,25 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.WHITE);
 
-        serviceStatus = label("Module service: not connected", 13, true);
+        serviceStatus = label("模块服务：未连接", 13, true);
         root.addView(serviceStatus);
 
         LinearLayout searchRow = row();
-        searchInput = input("Search place", false);
+        searchInput = input("搜索地点", false);
         searchRow.addView(searchInput, weight());
-        searchRow.addView(button("Search", this::searchPlace), weight());
+        searchRow.addView(button("搜索", this::searchPlace), weight());
         root.addView(searchRow);
+        root.addView(label("地图源：USB 本机代理（全球底图）", 12, false));
 
         mapView = new MapView(this);
-        mapView.setTileSource(TileSourceFactory.MAPNIK);
+        mapView.setTileSource(GAODE_ROAD_TILE_SOURCE);
         mapView.setMultiTouchControls(true);
+        mapView.setUseDataConnection(true);
+        mapView.setTilesScaledToDpi(true);
         mapView.getController().setZoom(14.0);
         mapView.getController().setCenter(new GeoPoint(SettingsStore.DEFAULT_LAT, SettingsStore.DEFAULT_LON));
         root.addView(mapView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(260)));
 
         mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {
             @Override
@@ -224,39 +251,40 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         }));
 
         ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(20, 12, 20, 28);
         scrollView.addView(panel);
 
-        runningStatus = label("Status: idle", 16, true);
+        runningStatus = label("状态：空闲", 16, true);
         panel.addView(runningStatus);
-        panel.addView(label("Tap to place, long-press to place and start.", 12, false));
+        panel.addView(label("单击地图仅放点，长按地图会放点并立即开始。", 12, false));
 
-        panel.addView(sectionTitle("Location"));
+        panel.addView(sectionTitle("位置"));
         LinearLayout coordRow = row();
-        latInput = input("Latitude", false);
-        lonInput = input("Longitude", false);
+        latInput = input("纬度", false);
+        lonInput = input("经度", false);
         coordRow.addView(latInput, weight());
         coordRow.addView(lonInput, weight());
         panel.addView(coordRow);
 
         LinearLayout baseRow = row();
-        speedInput = input("Speed m/s", false);
-        altitudeInput = input("Altitude m", false);
-        accuracyInput = input("Accuracy m", false);
-        bearingInput = input("Bearing", false);
+        speedInput = input("速度 m/s", false);
+        altitudeInput = input("海拔 m", false);
+        accuracyInput = input("精度 m", false);
+        bearingInput = input("方向角", false);
         baseRow.addView(speedInput, weight());
         baseRow.addView(altitudeInput, weight());
         baseRow.addView(accuracyInput, weight());
         baseRow.addView(bearingInput, weight());
         panel.addView(baseRow);
 
-        panel.addView(sectionTitle("Policies"));
-        wifiShield = checkbox("Wi-Fi shield", true);
-        cellShield = checkbox("Cell shield", true);
-        mockShield = checkbox("Mock shield", true);
-        movementMode = checkbox("Route movement", false);
+        panel.addView(sectionTitle("策略"));
+        wifiShield = checkbox("Wi-Fi 屏蔽", true);
+        cellShield = checkbox("基站屏蔽", true);
+        mockShield = checkbox("Mock 标记屏蔽", true);
+        movementMode = checkbox("路线移动", false);
         LinearLayout policyRow1 = row();
         policyRow1.addView(wifiShield, weight());
         policyRow1.addView(cellShield, weight());
@@ -264,10 +292,10 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         policyRow1.addView(movementMode, weight());
         panel.addView(policyRow1);
 
-        nrEnabled = checkbox("Allow 5G/NR", true);
-        nmeaEnabled = checkbox("NMEA callbacks", true);
-        agpsEnabled = checkbox("AGPS reported", true);
-        vendorHooksEnabled = checkbox("Vendor/fused hooks", true);
+        nrEnabled = checkbox("启用 5G/NR", true);
+        nmeaEnabled = checkbox("启用 NMEA 回调", true);
+        agpsEnabled = checkbox("上报 AGPS", true);
+        vendorHooksEnabled = checkbox("启用厂商/Fused Hook", true);
         LinearLayout policyRow2 = row();
         policyRow2.addView(nrEnabled, weight());
         policyRow2.addView(nmeaEnabled, weight());
@@ -275,12 +303,12 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         policyRow2.addView(vendorHooksEnabled, weight());
         panel.addView(policyRow2);
 
-        panel.addView(sectionTitle("Radio + Jitter"));
+        panel.addView(sectionTitle("蜂窝与抖动"));
         LinearLayout carrierRow = row();
         mccInput = input("MCC", false);
         mncInput = input("MNC", false);
-        countryInput = input("Country", false);
-        operatorInput = input("Operator", false);
+        countryInput = input("国家/地区", false);
+        operatorInput = input("运营商", false);
         carrierRow.addView(mccInput, weight());
         carrierRow.addView(mncInput, weight());
         carrierRow.addView(countryInput, weight());
@@ -288,67 +316,70 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         panel.addView(carrierRow);
 
         LinearLayout tuningRow = row();
-        gnssSatInput = input("GNSS sats", false);
-        routeSpeedVariationInput = input("Speed var 0-0.75", false);
-        accuracyJitterInput = input("Acc jitter m", false);
-        altitudeJitterInput = input("Alt jitter m", false);
+        gnssSatInput = input("GNSS 星数", false);
+        routeSpeedVariationInput = input("速度波动 0-0.75", false);
+        accuracyJitterInput = input("精度抖动 m", false);
+        altitudeJitterInput = input("海拔抖动 m", false);
         tuningRow.addView(gnssSatInput, weight());
         tuningRow.addView(routeSpeedVariationInput, weight());
         tuningRow.addView(accuracyJitterInput, weight());
         tuningRow.addView(altitudeJitterInput, weight());
         panel.addView(tuningRow);
 
-        panel.addView(sectionTitle("Route"));
-        routeLoop = checkbox("Loop route", false);
-        routeAutoBearing = checkbox("Auto bearing", true);
+        panel.addView(sectionTitle("路线"));
+        routeLoop = checkbox("循环路线", false);
+        routeAutoBearing = checkbox("自动方向角", true);
         LinearLayout routeToggleRow = row();
         routeToggleRow.addView(routeLoop, weight());
         routeToggleRow.addView(routeAutoBearing, weight());
         panel.addView(routeToggleRow);
-        routeJsonInput = input("Route JSON", true);
+        routeJsonInput = input("路线 JSON", true);
         panel.addView(routeJsonInput);
         LinearLayout routeButtonRow1 = row();
-        routeButtonRow1.addView(button("Add point", this::addRoutePoint), weight());
-        routeButtonRow1.addView(button("Save route", this::saveRouteFromEditor), weight());
-        routeButtonRow1.addView(button("Use start", this::useRouteStart), weight());
-        routeButtonRow1.addView(button("Clear route", this::clearRoute), weight());
+        routeButtonRow1.addView(button("添加点位", this::addRoutePoint), weight());
+        routeButtonRow1.addView(button("保存路线", this::saveRouteFromEditor), weight());
+        routeButtonRow1.addView(button("使用起点", this::useRouteStart), weight());
+        routeButtonRow1.addView(button("清空路线", this::clearRoute), weight());
         panel.addView(routeButtonRow1);
         LinearLayout routeButtonRow2 = row();
-        routeButtonRow2.addView(button("Start", this::startSpoofing), weight());
-        routeButtonRow2.addView(button("Pause", this::pauseRoute), weight());
-        routeButtonRow2.addView(button("Resume", this::resumeRoute), weight());
-        routeButtonRow2.addView(button("Stop", this::stopSpoofing), weight());
+        routeButtonRow2.addView(button("开始", this::startSpoofing), weight());
+        routeButtonRow2.addView(button("暂停", this::pauseRoute), weight());
+        routeButtonRow2.addView(button("继续", this::resumeRoute), weight());
+        routeButtonRow2.addView(button("停止", this::stopSpoofing), weight());
         panel.addView(routeButtonRow2);
 
-        panel.addView(sectionTitle("Favorites"));
-        favoritesJsonInput = input("Favorites JSON", true);
+        panel.addView(sectionTitle("收藏"));
+        favoritesJsonInput = input("收藏 JSON", true);
         panel.addView(favoritesJsonInput);
         LinearLayout favoriteRow1 = row();
-        favoriteRow1.addView(button("Add current", this::addFavorite), weight());
-        favoriteRow1.addView(button("Save JSON", this::saveFavoritesFromEditor), weight());
-        favoriteRow1.addView(button("Use last", this::useLastFavorite), weight());
-        favoriteRow1.addView(button("Clear", this::clearFavorites), weight());
+        favoriteRow1.addView(button("加入当前点", this::addFavorite), weight());
+        favoriteRow1.addView(button("保存 JSON", this::saveFavoritesFromEditor), weight());
+        favoriteRow1.addView(button("使用最近项", this::useLastFavorite), weight());
+        favoriteRow1.addView(button("清空收藏", this::clearFavorites), weight());
         panel.addView(favoriteRow1);
         LinearLayout favoriteRow2 = row();
-        favoriteRow2.addView(button("Save config", this::saveCurrentState), weight());
-        favoriteRow2.addView(button("Apply + Probe", this::applyAndLaunchProbe), weight());
-        favoriteRow2.addView(button("Probe only", this::launchProbe), weight());
-        favoriteRow2.addView(button("Reset", this::resetDefaults), weight());
+        favoriteRow2.addView(button("保存配置", this::saveCurrentState), weight());
+        favoriteRow2.addView(button("应用并验证", this::applyAndLaunchProbe), weight());
+        favoriteRow2.addView(button("仅启动验证", this::launchProbe), weight());
+        favoriteRow2.addView(button("恢复默认", this::resetDefaults), weight());
         panel.addView(favoriteRow2);
 
-        panel.addView(sectionTitle("Diagnostics"));
+        panel.addView(sectionTitle("诊断"));
         diagnosticsStatus = label("", 12, false);
         diagnosticsStatus.setTextIsSelectable(true);
         panel.addView(diagnosticsStatus);
         LinearLayout diagRow = row();
-        diagRow.addView(button("Refresh", this::refreshDiagnostics), weight());
-        diagRow.addView(button("Reload", this::loadSettings), weight());
+        diagRow.addView(button("刷新", this::refreshDiagnostics), weight());
+        diagRow.addView(button("重载", this::loadSettings), weight());
         panel.addView(diagRow);
 
         root.addView(scrollView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
         return root;
+    }
+
+    private int dp(int value) {
+        return Math.round(getResources().getDisplayMetrics().density * value);
     }
 
     private TextView sectionTitle(String title) {
@@ -469,7 +500,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     }
 
     private void saveCurrentState() {
-        commitSettings(isActive(), false, "Saved");
+        commitSettings(isActive(), false, "已保存配置");
     }
 
     private void startSpoofing() {
@@ -699,38 +730,32 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     private void searchPlace() {
         String query = textOf(searchInput);
         if (query.isEmpty()) {
-            Toast.makeText(this, "Enter a place", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "请输入地点关键字", Toast.LENGTH_SHORT).show();
             return;
         }
-        Toast.makeText(this, "Searching...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "正在搜索...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            HttpURLConnection connection = null;
             try {
-                String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
-                URL url = new URL("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encoded);
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestProperty("User-Agent", getPackageName() + "/0.1");
-                connection.setConnectTimeout(8000);
-                connection.setReadTimeout(8000);
-                byte[] bytes = connection.getInputStream().readAllBytes();
-                JSONArray results = new JSONArray(new String(bytes, StandardCharsets.UTF_8));
-                if (results.length() == 0) {
-                    runOnUiThread(() -> Toast.makeText(this, "No result", Toast.LENGTH_SHORT).show());
+                if (!Geocoder.isPresent()) {
+                    runOnUiThread(() -> Toast.makeText(this, "当前系统未提供地点搜索服务，请直接点地图选点", Toast.LENGTH_SHORT).show());
                     return;
                 }
-                JSONObject first = results.getJSONObject(0);
-                double lat = Double.parseDouble(first.getString("lat"));
-                double lon = Double.parseDouble(first.getString("lon"));
+                Geocoder geocoder = new Geocoder(this, Locale.SIMPLIFIED_CHINESE);
+                List<Address> results = geocoder.getFromLocationName(query, 1);
+                if (results == null || results.isEmpty()) {
+                    runOnUiThread(() -> Toast.makeText(this, "未找到地点，请直接点地图或手填坐标", Toast.LENGTH_SHORT).show());
+                    return;
+                }
+                Address first = results.get(0);
+                double lat = first.getLatitude();
+                double lon = first.getLongitude();
                 runOnUiThread(() -> {
                     setCoordinate(lat, lon);
                     saveCurrentState();
+                    Toast.makeText(this, "已定位到搜索结果", Toast.LENGTH_SHORT).show();
                 });
             } catch (Throwable throwable) {
-                runOnUiThread(() -> Toast.makeText(this, "Search failed", Toast.LENGTH_SHORT).show());
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
+                runOnUiThread(() -> Toast.makeText(this, "搜索失败，请直接点地图或手填坐标", Toast.LENGTH_SHORT).show());
             }
         }, "ghostloc-search").start();
     }
@@ -739,21 +764,21 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         try {
             List<FavoriteEntry> favorites = parseFavorites(normalizeFavoritesJson(textOf(favoritesJsonInput)));
             favorites.add(new FavoriteEntry(
-                    "Favorite " + (favorites.size() + 1),
-                    textOf(countryInput).isEmpty() ? "default" : textOf(countryInput),
+                    "收藏点 " + (favorites.size() + 1),
+                    textOf(countryInput).isEmpty() ? "默认" : textOf(countryInput),
                     parseDouble(latInput, SettingsStore.DEFAULT_LAT),
                     parseDouble(lonInput, SettingsStore.DEFAULT_LON)));
-            saveFavorites(favorites, "Favorite saved");
+            saveFavorites(favorites, "已保存收藏点");
         } catch (Throwable throwable) {
-            Toast.makeText(this, "Favorite invalid", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "当前收藏内容无效", Toast.LENGTH_SHORT).show();
         }
     }
 
     private void saveFavoritesFromEditor() {
         try {
-            saveFavorites(parseFavorites(normalizeFavoritesJson(textOf(favoritesJsonInput))), "Favorites saved");
+            saveFavorites(parseFavorites(normalizeFavoritesJson(textOf(favoritesJsonInput))), "已保存收藏列表");
         } catch (Throwable throwable) {
-            Toast.makeText(this, "Favorites JSON invalid", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "收藏 JSON 格式无效", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -768,7 +793,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     private void useLastFavorite() {
         List<FavoriteEntry> favorites = parseFavorites(prefs().getString(SettingsStore.FAVORITES, ""));
         if (favorites.isEmpty()) {
-            Toast.makeText(this, "No favorite", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "暂无收藏点", Toast.LENGTH_SHORT).show();
             return;
         }
         FavoriteEntry entry = favorites.get(favorites.size() - 1);
@@ -780,27 +805,27 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         prefs().edit().remove(SettingsStore.FAVORITES).apply();
         favoritesJsonInput.setText("[]");
         refreshDiagnostics();
-        Toast.makeText(this, "Favorites cleared", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "已清空收藏", Toast.LENGTH_SHORT).show();
     }
 
     private void addRoutePoint() {
         try {
             List<RouteEntry> route = parseRoute(normalizeRouteJson(textOf(routeJsonInput)));
             route.add(new RouteEntry(
-                    "Point " + (route.size() + 1),
+                    "点位 " + (route.size() + 1),
                     parseDouble(latInput, SettingsStore.DEFAULT_LAT),
                     parseDouble(lonInput, SettingsStore.DEFAULT_LON)));
-            saveRoute(route, "Route point saved");
+            saveRoute(route, "已保存路线点");
         } catch (Throwable throwable) {
-            Toast.makeText(this, "Route invalid", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "当前路线内容无效", Toast.LENGTH_SHORT).show();
         }
     }
 
     private void saveRouteFromEditor() {
         try {
-            saveRoute(parseRoute(normalizeRouteJson(textOf(routeJsonInput))), "Route saved");
+            saveRoute(parseRoute(normalizeRouteJson(textOf(routeJsonInput))), "已保存路线");
         } catch (Throwable throwable) {
-            Toast.makeText(this, "Route JSON invalid", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "路线 JSON 格式无效", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -815,7 +840,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     private void useRouteStart() {
         List<RouteEntry> route = parseRoute(prefs().getString(SettingsStore.ROUTE_POINTS, ""));
         if (route.isEmpty()) {
-            Toast.makeText(this, "No route", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "当前没有路线", Toast.LENGTH_SHORT).show();
             return;
         }
         RouteEntry entry = route.get(0);
@@ -831,13 +856,13 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                 .apply();
         routeJsonInput.setText("[]");
         refreshDiagnostics();
-        Toast.makeText(this, "Route cleared", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "已清空路线", Toast.LENGTH_SHORT).show();
     }
 
     private void pauseRoute() {
         SharedPreferences current = prefs();
         if (!current.getBoolean(SettingsStore.ACTIVE, false) || !movementMode.isChecked()) {
-            Toast.makeText(this, "Start route movement first", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "请先启动路线移动", Toast.LENGTH_SHORT).show();
             return;
         }
         long startedAt = current.getLong(SettingsStore.STARTED_AT, 0L);
@@ -849,13 +874,13 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                 .apply();
         updateRunningStatus(prefs());
         refreshDiagnostics();
-        Toast.makeText(this, "Route paused", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "路线已暂停", Toast.LENGTH_SHORT).show();
     }
 
     private void resumeRoute() {
         SharedPreferences current = prefs();
         if (!current.getBoolean(SettingsStore.ACTIVE, false)) {
-            Toast.makeText(this, "Spoofing is not active", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "当前未启动定位伪装", Toast.LENGTH_SHORT).show();
             return;
         }
         long pausedElapsed = current.getLong(SettingsStore.ROUTE_PAUSE_ELAPSED_MS, 0L);
@@ -866,7 +891,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                 .apply();
         updateRunningStatus(prefs());
         refreshDiagnostics();
-        Toast.makeText(this, "Route resumed", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "路线已继续", Toast.LENGTH_SHORT).show();
     }
 
     private void applyAndLaunchProbe() {
@@ -877,7 +902,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
     private void launchProbe() {
         Intent launch = getPackageManager().getLaunchIntentForPackage("dev.ghostloc.probe");
         if (launch == null) {
-            Toast.makeText(this, "Probe app not installed", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "验证应用未安装", Toast.LENGTH_SHORT).show();
             return;
         }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -896,7 +921,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                 .remove(SettingsStore.LAST_PROBE_AT)
                 .apply();
         loadSettings();
-        Toast.makeText(this, "Defaults restored", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show();
     }
 
     private boolean isActive() {
@@ -919,23 +944,24 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         String lastProcess = prefs.getString(SettingsStore.DIAG_LAST_PROCESS, "n/a");
         String hits = prefs.getString(SettingsStore.DIAG_RECENT_HITS, "none");
         String errors = prefs.getString(SettingsStore.DIAG_RECENT_ERRORS, "none");
-        String probeReport = localPrefs.getString(SettingsStore.LAST_PROBE_REPORT, "none");
+        String probeReport = localPrefs.getString(SettingsStore.LAST_PROBE_REPORT, "无");
         boolean probeOk = localPrefs.getBoolean(SettingsStore.LAST_PROBE_OK, false);
         long probeAt = localPrefs.getLong(SettingsStore.LAST_PROBE_AT, 0L);
-        String text = "Framework: " + (service == null ? "disconnected" : service.getFrameworkName() + " API " + service.getApiVersion())
-                + "\nActive: " + prefs.getBoolean(SettingsStore.ACTIVE, false)
-                + "  Route paused: " + prefs.getBoolean(SettingsStore.ROUTE_PAUSED, false)
-                + "  Last status: " + prefs.getString(SettingsStore.LAST_STATUS, "idle")
-                + "\nLast process: " + lastProcess
-                + "\nFavorites: " + favoriteCount
-                + "  Route points: " + routeCount
-                + "  Vendor hooks: " + prefs.getBoolean(SettingsStore.VENDOR_HOOKS_ENABLED, true)
-                + "\nLast probe: " + (probeAt == 0L ? "none" : (probeOk ? "PASS " : "FAIL ") + stamp(probeAt))
-                + "\nExpected scope: system_server, android, com.android.location.fused, dev.ghostloc.probe, dev.ghostloc.demo"
-                + "\nOptional scope: com.oplus.location, com.xiaomi.location.fused"
-                + "\nProbe report:\n" + probeReport
-                + "\nRecent hits:\n" + hits
-                + "\nRecent errors:\n" + errors;
+        String text = "框架服务：" + (service == null ? "未连接" : service.getFrameworkName() + " API " + service.getApiVersion())
+                + "\n地图源：USB 本机代理（全球底图）"
+                + "\n已启用：" + prefs.getBoolean(SettingsStore.ACTIVE, false)
+                + "  路线暂停：" + prefs.getBoolean(SettingsStore.ROUTE_PAUSED, false)
+                + "  最近状态：" + describeLastStatus(prefs.getString(SettingsStore.LAST_STATUS, "idle"))
+                + "\n最近进程：" + lastProcess
+                + "\n收藏数量：" + favoriteCount
+                + "  路线点数：" + routeCount
+                + "  厂商 Hook：" + prefs.getBoolean(SettingsStore.VENDOR_HOOKS_ENABLED, true)
+                + "\n最近验证：" + (probeAt == 0L ? "无" : (probeOk ? "通过 " : "失败 ") + stamp(probeAt))
+                + "\n建议作用域：system_server、android、com.android.location.fused、dev.ghostloc.probe、dev.ghostloc.demo"
+                + "\n可选作用域：com.oplus.location、com.xiaomi.location.fused"
+                + "\n验证报告：\n" + probeReport
+                + "\n最近命中：\n" + hits
+                + "\n最近错误：\n" + errors;
         diagnosticsStatus.setText(text);
     }
 
@@ -980,8 +1006,10 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
         marker.setTitle(String.format(Locale.US, "%.6f, %.6f", lat, lon));
         mapView.getOverlays().add(marker);
-        mapView.getController().animateTo(point);
-        mapView.invalidate();
+        mapView.post(() -> {
+            mapView.getController().setCenter(point);
+            mapView.invalidate();
+        });
     }
 
     private void updateRunningStatus(SharedPreferences prefs) {
@@ -989,15 +1017,37 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
         boolean paused = prefs.getBoolean(SettingsStore.ROUTE_PAUSED, false);
         String status;
         if (!active) {
-            status = "Status: idle";
+            status = "状态：空闲";
         } else if (paused) {
-            status = "Status: spoofing active (route paused)";
+            status = "状态：定位伪装已启用（路线已暂停）";
         } else if (prefs.getBoolean(SettingsStore.MOVEMENT, false)) {
-            status = "Status: spoofing active (route moving)";
+            status = "状态：定位伪装已启用（路线移动中）";
         } else {
-            status = "Status: spoofing active";
+            status = "状态：定位伪装已启用";
         }
         runningStatus.setText(status);
+    }
+
+    private String describeLastStatus(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "空闲";
+        }
+        switch (raw) {
+            case "idle":
+                return "空闲";
+            case "route-paused":
+                return "路线已暂停";
+            case "route-resumed":
+                return "路线已继续";
+            case "reset":
+                return "已恢复默认";
+            case "started":
+                return "已启动";
+            case "stopped":
+                return "已停止";
+            default:
+                return raw;
+        }
     }
 
     private String formatDouble(double value, int digits) {
@@ -1049,8 +1099,8 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
                 String[] parts = items[i].split(",");
                 if (parts.length >= 2) {
                     favorites.add(new FavoriteEntry(
-                            "Favorite " + (i + 1),
-                            "legacy",
+                            "收藏点 " + (i + 1),
+                            "历史",
                             Double.parseDouble(parts[0].trim()),
                             Double.parseDouble(parts[1].trim())));
                 }
@@ -1062,8 +1112,8 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
             for (int i = 0; i < array.length(); i++) {
                 JSONObject item = array.getJSONObject(i);
                 favorites.add(new FavoriteEntry(
-                        item.optString("name", "Favorite " + (i + 1)),
-                        item.optString("group", "default"),
+                        item.optString("name", "收藏点 " + (i + 1)),
+                        item.optString("group", "默认"),
                         item.getDouble("lat"),
                         item.getDouble("lon")));
             }
@@ -1100,7 +1150,7 @@ public final class MainActivity extends Activity implements ModuleApplication.Se
             for (int i = 0; i < array.length(); i++) {
                 JSONObject item = array.getJSONObject(i);
                 route.add(new RouteEntry(
-                        item.optString("name", "Point " + (i + 1)),
+                        item.optString("name", "点位 " + (i + 1)),
                         item.getDouble("lat"),
                         item.getDouble("lon")));
             }
