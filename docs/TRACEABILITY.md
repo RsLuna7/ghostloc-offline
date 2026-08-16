@@ -963,3 +963,11 @@ Device verification (two install/reboot cycles, OnePlus7 / Android 15):
 Note on evidence capture: boot-time logcat rotates out before adb is up, so
 install counts were read from the LSPosed persistent module log via root
 (`su -c grep ... /data/adb/lspd/log/modules_*.log`), not logcat.
+
+### Addendum — P1 #10 one-liners
+
+- `WifiServiceImpl#isScanAlwaysAvailable` -> false and LMS
+  `#requestListenerFlush` neutral-reject ported in the same session
+  (third install/reboot cycle); device-verified via
+  `wifi service hooks installed=6`, LMS `installed=15`, hit log
+  `wifi scan-always masked`, probe PASS unchanged.

@@ -81,6 +81,7 @@ object WifiServiceHooks {
                 "getScanResults", "getMatchingScanResults" -> WifiScanResultsHooker::class.java
                 "getConnectionInfo" -> WifiConnectionInfoHooker::class.java
                 "startScan" -> WifiStartScanHooker::class.java
+                "isScanAlwaysAvailable" -> WifiScanAlwaysAvailableHooker::class.java
                 "registerScanResultsCallback" -> WifiScanCallbackHooker::class.java
                 else -> null
             }
@@ -168,6 +169,18 @@ class WifiStartScanHooker : XposedInterface.Hooker {
         fun before(callback: XposedInterface.BeforeHookCallback) {
             if (ModuleRuntime.wifiShield()) {
                 HookSupport.logHit(callback.member, "wifi startScan masked")
+                callback.returnAndSkip(false)
+            }
+        }
+    }
+}
+
+class WifiScanAlwaysAvailableHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (ModuleRuntime.wifiShield()) {
+                HookSupport.logHit(callback.member, "wifi scan-always masked")
                 callback.returnAndSkip(false)
             }
         }

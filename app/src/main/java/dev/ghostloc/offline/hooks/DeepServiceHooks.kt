@@ -70,6 +70,8 @@ object DeepServiceHooks {
                     ServiceProviderEnabledHooker::class.java
                 name == "registerGnssStatusCallback" ->
                     ServiceTrueHooker::class.java
+                name == "requestListenerFlush" ->
+                    ServiceRejectHooker::class.java
                 name == "addGnssMeasurementsListener" || name == "addGnssAntennaInfoListener" ->
                     ServiceRejectHooker::class.java
                 name in TEST_PROVIDER_METHODS ->

@@ -37,7 +37,7 @@
 | `#isProviderEnabled(ForUser)` | ● gps/network 恒 true；`"ghostmapx"` 恒 true；fused 看开关 | ● gps/network 恒 true（无 ghostmapx provider，fused 不强制） | 2026-08-16 P0 已移植 |
 | `#registerGnssStatusCallback` | ● 强制 true（阻断真实星况下发） | ● 服务端强制 true + scoped 客户端仍合成 GnssStatus | 2026-08-16 P0 已移植 |
 | `#addTestProvider`/`setTestProviderLocation`/`setTestProviderEnabled`/`setExtraLocationControllerPackage*` | ● 全部返回 null/false（封锁第三方 mock 通道） | ● 同组方法拒绝 + `setExtraLocationControllerPackageEnabled` 强制 false | 2026-08-16 P0 已移植 |
-| `#requestListenerFlush` | ● 入队 + 拦截 | ○ | P2 |
+| `#requestListenerFlush` | ● 入队 + 拦截 | ● 中性拒绝（2026-08-16 已移植，真机安装验证） | 语义相当（flush 无效果） |
 | `AbstractLocationProvider#reportLocation` / `LocationProviderManager#onReportLocation` | ● 改写 `LocationResult.mLocations` | ● before 替换参数中的 Location/LocationResult | 相当 |
 | `LocationProviderManager` 所有返回 Location 方法 | ● after 注入 | ◐ `getLastLocation`/`getCurrentLocation` 按名匹配 | 近似相当 |
 | `PassiveLocationProvider#updateLocation` | ● | ○ | P2（被动 provider 路径） |
@@ -62,7 +62,7 @@
 | `WifiServiceImpl#getScanResults`（服务端，含 ParceledListSlice） | ● | ● 2026-08-16 已补齐 | 已一致 |
 | `#getMatchingScanResults` | ● 空 | ● | 已一致 |
 | `#startScan` | ● false | ● | 已一致 |
-| `#isScanAlwaysAvailable`（服务端） | ● false | ○ 客户端已 hook | P1 一行补齐 |
+| `#isScanAlwaysAvailable`（服务端） | ● false | ● 2026-08-16 已补齐（真机命中 `wifi scan-always masked`） | 已一致 |
 | `#getConnectionInfo`（服务端，假 MAC/BSSID） | ● | ● | 已一致 |
 | `#registerScanResultsCallback` 回调抑制 | ● | ● | 已一致 |
 | WifiStack APEX classloader 解析 | ● 双路径（`sLoadedPaths` / `loadClassFromLoader` 监听） | ● 同款双路径 | 已一致 |
@@ -170,7 +170,7 @@
 | 7 | Location extras 补齐 | ✅ 已移植：satellites/maxCn0/meanCn0 随机 + `makeComplete()`；`overwrite` 保留原 extras |
 | 8 | 第三方 SDK hook 组（scoped 进程） | TencentNLPManager / AMap NetworkLocationManager / Baidu LocationClient |
 | 9 | `TelephonyRegistry#notifyCellLocation*` + `listen` 监听器包装 | 推送型小区位置也合成 |
-| 10 | 服务端 `isScanAlwaysAvailable`→false、`requestListenerFlush`、`PassiveLocationProvider#updateLocation` | 零散小面 |
+| 10 | 服务端 `isScanAlwaysAvailable`→false、`requestListenerFlush`、`PassiveLocationProvider#updateLocation` | ✅ 前两项已移植并真机验证；PassiveProvider 路径待做 |
 | 11 | SystemProperties 状态镜像 | Bridge 写状态文件的同时写 `persist.ghostloc.*`，让 phone 进程开关实时生效 |
 
 ### P2 —— 产品功能（可选）
