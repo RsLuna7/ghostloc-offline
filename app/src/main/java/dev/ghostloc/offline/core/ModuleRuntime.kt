@@ -20,6 +20,7 @@ object ModuleRuntime {
     const val TAG = "GhostLocModule"
     const val SELF_PACKAGE = "dev.ghostloc.offline"
     const val BRIDGE_PROVIDER = "ghostloc"
+    const val FAKED_EXTRA = "ghostloc_faked"
     const val DIAGNOSTIC_LIMIT = 12
 
     val VENDOR_LOCATION_PACKAGES: Set<String> = Collections.unmodifiableSet(

@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
@@ -56,6 +57,9 @@ object SpoofState {
         location.setVerticalAccuracyMeters(5.0f)
         location.setSpeedAccuracyMetersPerSecond(0.1f)
         location.setBearingAccuracyDegrees(1.0f)
+        val extras = location.extras ?: Bundle()
+        extras.putBoolean(ModuleRuntime.FAKED_EXTRA, true)
+        location.extras = extras
         return location
     }
 

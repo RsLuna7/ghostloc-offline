@@ -24,7 +24,10 @@
     <string name="tile_source_amap_satellite">高德卫星</string>
     <string name="tile_source_osm">OpenStreetMap</string>
     <string name="pickup_correct">拾取坐标纠偏 (GCJ-02→WGS-84)</string>
-    <string name="map_hint">单击地图仅放点，长按地图会放点并立即开始。</string>
+    <string name="map_hint">单击放点，长按放点并立即开始；拖动图钉可微调位置。</string>
+    <string name="cd_zoom_in">放大</string>
+    <string name="cd_zoom_out">缩小</string>
+    <string name="cd_recenter">回到标记点</string>
     <string name="button_start">开始</string>
     <string name="button_stop">停止</string>
     <string name="button_save">保存配置</string>

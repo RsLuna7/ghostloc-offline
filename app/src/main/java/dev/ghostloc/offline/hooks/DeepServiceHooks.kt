@@ -2,6 +2,7 @@ package dev.ghostloc.offline.hooks
 
 import android.location.Location
 import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Binder
 import dev.ghostloc.offline.core.ModuleRuntime
 import dev.ghostloc.offline.core.ModuleRuntime.findClass
@@ -24,7 +25,17 @@ object DeepServiceHooks {
         "android.location.ILocationManager\$Stub",
         "com.android.server.location.provider.LocationProviderManager",
         "com.android.server.location.provider.AbstractLocationProvider",
+        "com.android.server.location.gnss.GnssManagerService",
         "com.android.server.location.gnss.hal.GnssNative",
+        "com.android.server.TelephonyRegistry",
+    )
+
+    private val TEST_PROVIDER_METHODS = setOf(
+        "addTestProvider",
+        "removeTestProvider",
+        "setTestProviderLocation",
+        "setTestProviderEnabled",
+        "setExtraLocationControllerPackage",
     )
 
     fun install(loader: ClassLoader?) {
@@ -55,12 +66,27 @@ object DeepServiceHooks {
                     ServiceTraceHooker::class.java
                 name == "reportLocation" ->
                     ServiceReportLocationHooker::class.java
+                name == "isProviderEnabled" || name == "isProviderEnabledForUser" ->
+                    ServiceProviderEnabledHooker::class.java
+                name == "registerGnssStatusCallback" ->
+                    ServiceTrueHooker::class.java
+                name == "addGnssMeasurementsListener" || name == "addGnssAntennaInfoListener" ->
+                    ServiceRejectHooker::class.java
+                name in TEST_PROVIDER_METHODS ->
+                    ServiceRejectHooker::class.java
+                name == "setExtraLocationControllerPackageEnabled" ->
+                    ServiceDisableExtraControllerHooker::class.java
                 // Server side of the UI command bridge: this is where the
                 // process has the privileges to persist state for all hooks.
                 name == "sendExtraCommand" && className == "com.android.server.location.LocationManagerService" ->
                     ServiceExtraCommandHooker::class.java
                 name == "onTransact" && className == "android.location.ILocationManager\$Stub" ->
                     ServiceTraceHooker::class.java
+                // Push channel for cell-info listeners: every registered app
+                // receives these broadcasts, so the list must be synthetic too.
+                className == "com.android.server.TelephonyRegistry" &&
+                    (name == "notifyCellInfo" || name == "notifyCellInfoForSubscriber") ->
+                    TelephonyCellNotifyHooker::class.java
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -77,6 +103,10 @@ object DeepServiceHooks {
                 if (name == "getLastLocation" || name == "requestLocationUpdates" || name == "getCurrentLocation"
                     || name == "registerLocationListener" || name == "removeUpdates"
                     || name == "reportLocation" || name == "onTransact"
+                    || name == "isProviderEnabled" || name == "isProviderEnabledForUser"
+                    || name == "registerGnssStatusCallback"
+                    || name == "addGnssMeasurementsListener" || name == "addGnssAntennaInfoListener"
+                    || name == "addTestProvider"
                 ) {
                     ModuleRuntime.log("deep method ${cls.name}#${ModuleRuntime.methodSignature(method)}")
                 }
@@ -107,6 +137,9 @@ object DeepServiceHooks {
             if (tryDispatchRemoteLocation(arg, location)) {
                 continue
             }
+            if (tryDispatchBinderLocationList(arg, location)) {
+                continue
+            }
             tryDispatchRemoteLocationList(arg, location)
         }
     }
@@ -116,6 +149,38 @@ object DeepServiceHooks {
             if (tryInvoke(target, name, arrayOf(Location::class.java), arrayOf(location))) {
                 return true
             }
+        }
+        return false
+    }
+
+    /**
+     * The service-side `getCurrentLocation` callbacks are binder proxies of
+     * `ILocationListener`, whose delivery method is
+     * `onLocationChanged(List<Location>, IRemoteCallback)` — a shape the
+     * single-argument attempts above never match, which is why
+     * `getCurrentLocation` used to come back null while spoofing.
+     */
+    private fun tryDispatchBinderLocationList(target: Any, location: Location): Boolean {
+        var current: Class<*>? = target.javaClass
+        while (current != null) {
+            for (method in current.declaredMethods) {
+                if (method.name != "onLocationChanged" || method.parameterCount != 2) {
+                    continue
+                }
+                val types = method.parameterTypes
+                if (!List::class.java.isAssignableFrom(types[0])) {
+                    continue
+                }
+                return try {
+                    method.isAccessible = true
+                    method.invoke(target, listOf(location), null)
+                    true
+                } catch (throwable: Throwable) {
+                    ModuleRuntime.log("binder list dispatch failed", throwable)
+                    false
+                }
+            }
+            current = current.superclass
         }
         return false
     }
@@ -234,11 +299,93 @@ class ServiceReportLocationHooker : XposedInterface.Hooker {
     }
 }
 
+class ServiceRejectHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.active()) {
+                return
+            }
+            HookSupport.logHit(callback.member, "service rejected")
+            HookSupport.skipWithNeutralResult(callback)
+        }
+    }
+}
+
+class ServiceTrueHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.active()) {
+                return
+            }
+            HookSupport.logHit(callback.member, "service forced true")
+            callback.returnAndSkip(true)
+        }
+    }
+}
+
+class ServiceProviderEnabledHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.active()) {
+                return
+            }
+            val provider = callback.args?.firstOrNull { it is String } as? String ?: return
+            if (provider == LocationManager.GPS_PROVIDER || provider == LocationManager.NETWORK_PROVIDER) {
+                HookSupport.logHit(callback.member, "provider enabled forced")
+                callback.returnAndSkip(true)
+            }
+        }
+    }
+}
+
+class ServiceDisableExtraControllerHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.active()) {
+                return
+            }
+            val args = callback.args ?: return
+            if (args.isNotEmpty() && args[0] is Boolean) {
+                args[0] = false
+                HookSupport.logHit(callback.member, "extra controller disabled")
+            }
+        }
+    }
+}
+
 class ServiceTraceHooker : XposedInterface.Hooker {
     companion object {
         @JvmStatic
         fun before(callback: XposedInterface.BeforeHookCallback) {
             HookSupport.logHit(callback.member, "service trace uid=" + Binder.getCallingUid())
+        }
+    }
+}
+
+/** Replaces the cell list pushed through TelephonyRegistry broadcasts. */
+class TelephonyCellNotifyHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.cellShield()) {
+                return
+            }
+            val args = callback.args ?: return
+            val cells = dev.ghostloc.offline.synth.CellSynth.makeCellInfoList()
+            var replaced = false
+            for (i in args.indices) {
+                if (args[i] is List<*>) {
+                    args[i] = cells
+                    replaced = true
+                }
+            }
+            if (replaced) {
+                HookSupport.logHit(callback.member, "telephony cell notify replaced")
+            }
         }
     }
 }

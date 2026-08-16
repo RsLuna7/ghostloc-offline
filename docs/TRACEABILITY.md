@@ -724,3 +724,174 @@ Three independent faults stacked:
   advanced settings, adaptive launcher icon
 - insets fix retained; four-tab structure unchanged; pixel-verified rendering
   on device (header band #93E9D6 across all tabs)
+
+### Map tab interaction pass (evening)
+
+Reported pain: map panning felt rough and horizontal drags easily flipped the
+pager to the params tab. Three stacked causes, all addressed:
+
+1. `ViewPager2`'s inner RecyclerView intercepted map drags past touch slop —
+   the map froze mid-gesture and the page slid away. New `MapTouchWrapper`
+   (FrameLayout around the MapView) claims the parent gesture chain for any
+   touch starting on the map (`requestDisallowInterceptTouchEvent`).
+2. `setTilesScaledToDpi(true)` requested lower-zoom tiles and upscaled them —
+   blurry and chunky while panning on the 1080p panel. Disabled; fling
+   explicitly enabled.
+3. Every draft sync removed/re-added the marker and forced `setCenter`, so
+   the viewport jumped back to the target on any background refresh. The
+   marker is now a single draggable instance (drag end feeds `pickPoint`
+   through the same GCJ-02 correction path), syncs only update its position,
+   and recentering is explicit.
+
+Map tab layout rebuilt as a full-bleed map with floating controls: top card
+(search + tile source), right-side zoom in/out/recenter icon buttons, single
+bottom card (pickup-correction switch, hint, start/stop/save). Search input
+now also submits on IME action.
+
+On-device verification (same evening, OnePlus7, after `adb install -r` +
+app restart, no reboot needed for the UI side):
+
+- layout pixel-checked: search card / right button column / bottom card in
+  place, no overlap or truncation; AMap tiles loading (岔河集乡 area)
+- three fast horizontal flings on the map (`input swipe … 120-200 ms`) left
+  the pager on the map tab (uiautomator still reports `searchCard` /
+  `pickupCorrectCheck`); before the wrapper these flipped to the params tab
+- panning persisted (viewport stayed where dragged, no snap-back to the
+  marker), zoom in ×2 and recenter buttons verified visually
+- long-press place-and-start fired `bridge sync sent active=true`; marker
+  title showed corrected WGS coordinates — note: this test overwrote the
+  active target with 39.103410,116.414553 (near the previous target)
+- `svc power stayon usb` used during testing to keep the panel awake for
+  screenshots; restored afterwards
+
+## 2026-08-16 (late) — QQ shared-location leak: server-side Wi-Fi/cell masking
+
+Reported symptom: AMap displayed the spoofed position, but QQ's
+location sharing showed the real one. Comparison against the original
+GhostMapX decompilation (`D:\.develop\ghostmapx_analysis-agent`) found the
+design gap: GhostMapX never hooks third-party apps — QQ is not in its scope
+either. Instead it masks location inputs **at the system-service side**, so
+every app regardless of scope loses its alternative positioning channels:
+
+- `GhostLocationHook.handlePackage` returns early for unknown packages
+  (jadx: GhostLocationHook.java:54-131) — no QQ hooks existed at all
+- Wi-Fi: `Hd.s` resolves the WifiStack APEX classloader
+  (`SystemServerClassLoaderFactory.sLoadedPaths`, key `service-wifi.jar`) and
+  `Hd.r` hooks `com.android.server.wifi.WifiServiceImpl`
+  (`getScanResults`→empty incl. `ParceledListSlice`, `getConnectionInfo`→
+  masked WifiInfo, `startScan`→false, `registerScanResultsCallback`→
+  suppressed, `getMatchingScanResults`→empty)
+- Cell: PhoneInterfaceManager hooks in com.android.phone plus
+  TelephonyRegistry `notifyCellInfo*` arg replacement in system_server
+
+ghostloc-offline only had the client-side equivalents (WifiManager /
+TelephonyManager class hooks), which do not run in out-of-scope processes —
+QQ's Tencent location SDK scanned real BSSIDs in its own process and
+re-derived the true position from its server-side database.
+
+Changes (all server-side, scope-independent):
+
+- `hooks/WifiServiceHooks.kt` (new): WifiServiceImpl masking in
+  system_server, APEX classloader resolution with a
+  `SystemServiceManager#loadClassFromLoader` fallback watcher
+- `hooks/PhoneServiceHooks.kt` (new): PhoneInterfaceManager synthesis in
+  com.android.phone (getAllCellInfo / getCellLocation / requestCellInfoUpdate
+  / network types / service state / operators)
+- `DeepServiceHooks`: TelephonyRegistry added as a target with
+  `notifyCellInfo(ForSubscriber)` list replacement; `getCurrentLocation`
+  dispatch now also handles the binder shape
+  `ILocationListener.onLocationChanged(List<Location>, IRemoteCallback)` —
+  the previous single-arg attempts never matched it, which is why
+  `getCurrentLocation` returned null while spoofing
+
+Verified on device after `adb install -r` + reboot:
+
+- bridge sync handled by the new system_server code (`handled=sync keys=28`)
+- unscoped AMap calls hit the server-side masks:
+  `wifi startScan masked WifiServiceImpl#startScan` (system_server pid),
+  `phone cell location masked PhoneInterfaceManager#getCellLocation`
+  (com.android.phone pid)
+- probe PASS: spoofed location on listener path, `scans=0`, masked
+  Wi-Fi identity, synthetic LTE+NR cells, `mock=false`
+- no hook errors or skipped deep hooks in logcat
+- QQ itself must be spot-checked by hand (only the owner can drive its UI):
+  the expectation is that with its Wi-Fi/cell channels empty and
+  LocationManager answers spoofed server-side, the shared location now
+  follows the target
+
+## 2026-08-16 (night) — full mechanism comparison against GhostMapX
+
+Systematic diff of the original module's complete hook inventory (recovered
+from the jadx decompilation, with bytecode recovery for methods jadx could
+not decompile) against ghostloc-offline, written up as
+[docs/GHOSTMAPX_COMPARISON.md](GHOSTMAPX_COMPARISON.md). Notable recovered
+details: the original hooks `Location#writeToParcel`/`LocationResult` as a
+serialization-level fallback layer, blocks `GnssManagerService`
+measurement/antenna listeners, suppresses the whole BLE scan chain inside
+com.android.bluetooth, locks down the test-provider channel, and adds
+per-output position micro-jitter (±accuracy/15 m) plus GNSS-look extras on
+every injected Location. Those are organized into a P0/P1/P2 port backlog;
+Wi-Fi service-side masking from the previous entry brought the main
+confrontation surfaces to parity already.
+
+## 2026-08-16 (night) — P0 port: serialization fallback, GNSS/BLE reject, test provider
+
+Purpose: close the five P0 gaps listed in
+[docs/GHOSTMAPX_COMPARISON.md](GHOSTMAPX_COMPARISON.md) §6 so any app,
+scoped or not, sees a consistent spoofed radio/location picture.
+
+Main files:
+
+```text
+app/src/main/java/dev/ghostloc/offline/hooks/BasicLocationHooks.kt
+app/src/main/java/dev/ghostloc/offline/hooks/BleServiceHooks.kt
+app/src/main/java/dev/ghostloc/offline/hooks/DeepServiceHooks.kt
+app/src/main/java/dev/ghostloc/offline/hooks/HookSupport.kt
+app/src/main/java/dev/ghostloc/offline/GhostLocModule.kt
+app/src/main/java/dev/ghostloc/offline/core/SpoofState.kt
+app/src/main/java/dev/ghostloc/offline/core/ModuleRuntime.kt
+probe-app/src/main/java/dev/ghostloc/probe/ProbeActivity.java
+```
+
+Implemented:
+
+- `Location#writeToParcel` field overwrite + `Location#set` remapping +
+  `LocationResult` asList / writeToParcel / Location in-out methods
+  (`BasicLocationHooks`, system_server only)
+- `GnssManagerService#addGnssMeasurementsListener` /
+  `#addGnssAntennaInfoListener` rejected; LMS `#registerGnssStatusCallback`
+  forced true
+- BLE scan swallow in `com.android.bluetooth` (candidate class list;
+  missing classes skipped)
+- test-provider family + `setExtraLocationControllerPackageEnabled=false`
+- LMS `isProviderEnabled(ForUser)` forces gps/network true
+- `ghostloc_faked` extras mark on every `SpoofState.makeLocation` so the
+  parcel layer does not rewrite an already-spoofed object
+- probe reports `gnss_meas_registered` and `test_provider_present`
+
+Deviations from the original (logged, not silent):
+
+- boolean service methods skip with `false`, not `null` (avoids unbox NPE)
+- no original `s` switch that can pass through raw GNSS measurements
+- no `"ghostmapx"` provider and no fused enable/disable switch
+- BLE class names taken from the comparison table + AOSP aliases;
+  `L7.i` itself did not decompile
+- timestamp preservation only on the parcel overwrite path (P2 full
+  continuity is still open)
+
+Build verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug :probe-app:assembleDebug
+```
+
+Device verification: **not done in this step**. Needs `adb install -r` +
+reboot so system_server / bluetooth pick up the new hooks, then probe +
+`adb logcat -s GhostLocModule` looking for:
+
+- `basic location hooks installed`
+- `LocationResult hooks installed`
+- `service rejected` / `service forced true` / `provider enabled forced`
+- `ble service hooks installed` / `ble scan swallowed`
+- probe `gnss_meas_registered=false` and `test_provider_present=false`
+  while spoofing is active

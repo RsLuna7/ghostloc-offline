@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.fragment.app.Fragment
@@ -23,7 +24,8 @@ import java.util.Locale
 /**
  * Map tab: tile-source picker (AMap road/satellite reachable in mainland
  * China, OSM as alternative), search, tap-to-pick with GCJ-02 correction, and
- * quick start/stop.
+ * quick start/stop. The map fills the page with floating controls; the marker
+ * is draggable for fine-tuning.
  */
 class MapFragment : Fragment(), ConfigDraft.Listener {
 
@@ -31,6 +33,7 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
     private var mapView: MapView? = null
     private var marker: Marker? = null
     private var suppressTileSpinnerSync = false
+    private var centered = false
 
     private val actions: UiActions?
         get() = activity as? UiActions
@@ -50,7 +53,11 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
         val map = binding.mapView
         mapView = map
         map.setMultiTouchControls(true)
-        map.setTilesScaledToDpi(true)
+        // DPI-scaled tiles request a lower zoom level and upscale it: blurry
+        // on dense screens and visibly chunky while panning. Native-resolution
+        // tiles stay crisp; the memory cost is bounded by the small cache.
+        map.setTilesScaledToDpi(false)
+        map.isFlingEnabled = true
         map.controller.setZoom(14.0)
 
         val tileLabels = TileSources.SOURCES.map { TileSources.labelFor(it.id, context) }
@@ -80,6 +87,22 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
             localPrefs?.edit()?.putBoolean(Prefs.UI_PICKUP_GCJ02_CORRECT, checked)?.apply()
         }
 
+        val marker = Marker(map).apply {
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            isDraggable = true
+            setOnMarkerDragListener(object : Marker.OnMarkerDragListener {
+                override fun onMarkerDrag(marker: Marker) {}
+
+                override fun onMarkerDragEnd(marker: Marker) {
+                    pickPoint(marker.position, start = false)
+                }
+
+                override fun onMarkerDragStart(marker: Marker) {}
+            })
+        }
+        map.overlays.add(marker)
+        this.marker = marker
+
         map.overlays.add(
             MapEventsOverlay(object : MapEventsReceiver {
                 override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
@@ -96,7 +119,18 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
             })
         )
 
+        binding.searchInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                searchPlace()
+                true
+            } else {
+                false
+            }
+        }
         binding.searchButton.setOnClickListener { searchPlace() }
+        binding.zoomInButton.setOnClickListener { map.controller.zoomIn() }
+        binding.zoomOutButton.setOnClickListener { map.controller.zoomOut() }
+        binding.recenterButton.setOnClickListener { recenterOnMarker() }
         binding.startButton.setOnClickListener { actions?.commit(true, true, getString(R.string.toast_started)) }
         binding.stopButton.setOnClickListener { actions?.commit(false, true, getString(R.string.toast_stopped)) }
         binding.saveButton.setOnClickListener {
@@ -112,6 +146,7 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
         ConfigDraft.removeListener(this)
         binding?.mapView?.onDetach()
         mapView = null
+        marker = null
         binding = null
         super.onDestroyView()
     }
@@ -142,7 +177,7 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
             binding.pickupCorrectCheck.isChecked = ConfigDraft.pickupGcj02Correct
         }
         applyTileSource()
-        updateMarker()
+        updateMarker(recenter = false)
     }
 
     private fun applyTileSource() {
@@ -158,7 +193,7 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
             map.setTileSource(next)
         }
         map.invalidate()
-        updateMarker()
+        updateMarker(recenter = false)
     }
 
     private fun pickPoint(picked: GeoPoint, start: Boolean) {
@@ -173,33 +208,47 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
         ConfigDraft.latText = String.format(Locale.US, "%.6f", lat)
         ConfigDraft.lonText = String.format(Locale.US, "%.6f", lon)
         ConfigDraft.notifyChanged(this)
-        updateMarker()
         if (start) {
             actions?.commit(true, true, getString(R.string.toast_started))
         }
     }
 
-    private fun updateMarker() {
+    /**
+     * Moves the shared marker without touching the viewport: callers that need
+     * to bring the point into view (search, explicit recenter) animate the
+     * camera themselves, so background draft syncs never yank the map out from
+     * under the user's finger.
+     */
+    private fun updateMarker(recenter: Boolean) {
         val map = mapView ?: return
+        val marker = marker ?: return
         val lat = ConfigDraft.latOr()
         val lon = ConfigDraft.lonOr()
         val source = TileSources.byId(ConfigDraft.tileSourceId)
         val display = if (source.isGcj02) GeoMath.wgs84ToGcj02(lat, lon) else doubleArrayOf(lat, lon)
         val point = GeoPoint(display[0], display[1])
-        val existing = marker
-        if (existing != null) {
-            map.overlays.remove(existing)
+        marker.position = point
+        marker.title = String.format(Locale.US, "%.6f, %.6f", lat, lon)
+        if (!centered) {
+            // first placement on a fresh MapView: show the point once
+            centered = true
+            map.post {
+                map.controller.setCenter(point)
+                map.invalidate()
+            }
+        } else if (recenter) {
+            map.controller.animateTo(point)
         }
-        val newMarker = Marker(map)
-        newMarker.position = point
-        newMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-        newMarker.title = String.format(Locale.US, "%.6f, %.6f", lat, lon)
-        map.overlays.add(newMarker)
-        marker = newMarker
-        map.post {
-            map.controller.setCenter(point)
-            map.invalidate()
-        }
+        map.invalidate()
+    }
+
+    private fun recenterOnMarker() {
+        val map = mapView ?: return
+        val lat = ConfigDraft.latOr()
+        val lon = ConfigDraft.lonOr()
+        val source = TileSources.byId(ConfigDraft.tileSourceId)
+        val display = if (source.isGcj02) GeoMath.wgs84ToGcj02(lat, lon) else doubleArrayOf(lat, lon)
+        map.controller.animateTo(GeoPoint(display[0], display[1]))
     }
 
     private fun searchPlace() {
@@ -218,7 +267,7 @@ class MapFragment : Fragment(), ConfigDraft.Listener {
                     ConfigDraft.latText = String.format(Locale.US, "%.6f", result[0])
                     ConfigDraft.lonText = String.format(Locale.US, "%.6f", result[1])
                     ConfigDraft.notifyChanged(this)
-                    updateMarker()
+                    recenterOnMarker()
                     Toast.makeText(context, R.string.toast_search_found, Toast.LENGTH_SHORT).show()
                 }
                 error == "no_geocoder" ->

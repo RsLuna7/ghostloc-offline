@@ -67,6 +67,22 @@ object HookSupport {
         ModuleRuntime.logHit(member, prefix)
     }
 
+    /**
+     * Skip the original method with a return value that matches the
+     * signature: `false` for boolean, `null` for void/reference. Avoids
+     * unbox NPEs that a blanket `null` would cause on boolean hooks.
+     */
+    fun skipWithNeutralResult(callback: XposedInterface.BeforeHookCallback) {
+        val method = callback.member as? java.lang.reflect.Method
+        val result: Any? = when (method?.returnType) {
+            java.lang.Boolean.TYPE, java.lang.Boolean::class.java -> false
+            java.lang.Integer.TYPE, java.lang.Integer::class.java -> 0
+            java.lang.Long.TYPE, java.lang.Long::class.java -> 0L
+            else -> null
+        }
+        callback.returnAndSkip(result)
+    }
+
     fun args(callback: XposedInterface.BeforeHookCallback): Array<Any?>? = callback.args
 
     fun args(callback: XposedInterface.AfterHookCallback): Array<Any?>? = callback.args

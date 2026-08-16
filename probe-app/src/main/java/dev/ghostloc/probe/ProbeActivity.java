@@ -72,6 +72,8 @@ public final class ProbeActivity extends Activity {
         StringBuilder report = new StringBuilder();
         probeLocation(report);
         probeGnss(report);
+        probeGnssMeasurements(report);
+        probeTestProvider(report);
         probeGeocoder(report);
         probeSettings(report);
         probeWifi(report);
@@ -386,6 +388,62 @@ public final class ProbeActivity extends Activity {
         }
         return "ttff=" + status.getTimeToFirstFix() + " count=" + satellites.size()
                 + " " + String.join(" | ", satellites);
+    }
+
+    private void probeGnssMeasurements(StringBuilder report) {
+        try {
+            LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (manager == null || android.os.Build.VERSION.SDK_INT < 24) {
+                report.append("gnss_meas_registered=skipped\n");
+                return;
+            }
+            android.location.GnssMeasurementsEvent.Callback callback =
+                    new android.location.GnssMeasurementsEvent.Callback() {
+                        @Override
+                        public void onGnssMeasurementsReceived(android.location.GnssMeasurementsEvent event) {
+                            Log.i(TAG, "gnss_meas_event=received count="
+                                    + (event == null ? -1 : event.getMeasurements().size()));
+                        }
+                    };
+            boolean registered;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                registered = manager.registerGnssMeasurementsCallback(
+                        Executors.newSingleThreadExecutor(), callback);
+            } else {
+                registered = manager.registerGnssMeasurementsCallback(callback);
+            }
+            report.append("gnss_meas_registered=").append(registered).append("\n");
+            try {
+                manager.unregisterGnssMeasurementsCallback(callback);
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable throwable) {
+            report.append("gnss_meas_registered=").append(throwable.getClass().getSimpleName()).append("\n");
+        }
+    }
+
+    private void probeTestProvider(StringBuilder report) {
+        LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (manager == null) {
+            report.append("test_provider_present=skipped\n");
+            return;
+        }
+        String name = "ghostloc_probe_test";
+        try {
+            manager.addTestProvider(name, false, false, false, false, true, true, true, 1, 1);
+        } catch (Throwable throwable) {
+            Log.i(TAG, "test_provider_add=" + throwable.getClass().getSimpleName());
+        }
+        boolean present = false;
+        try {
+            present = manager.getAllProviders().contains(name) || manager.getProvider(name) != null;
+        } catch (Throwable ignored) {
+        }
+        report.append("test_provider_present=").append(present).append("\n");
+        try {
+            manager.removeTestProvider(name);
+        } catch (Throwable ignored) {
+        }
     }
 
     private void probeGeocoder(StringBuilder report) {

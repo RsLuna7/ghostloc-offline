@@ -29,10 +29,18 @@ Verified on device (2026-08-16):
 
 Known behavior notes:
 
-- `getCurrentLocation` returns null while spoofing; apps fall back to
-  `getLastKnownLocation`/listeners, which serve live spoofed values
-- client-only hooks (GNSS/NMEA/Wi-Fi/cell settings) read boot-time
-  configuration; changing those toggles requires restarting the target app
+- Wi-Fi and cell data are masked **server-side** as well
+  (`WifiServiceImpl` in system_server, `PhoneInterfaceManager` in
+  com.android.phone, `TelephonyRegistry` broadcasts), so out-of-scope apps
+  that would otherwise re-derive the real position from their own scans
+  (e.g. Tencent/AMap location SDKs uploading BSSIDs) see empty or synthetic
+  radio data
+- `getCurrentLocation` dispatch covers the binder listener shape
+  `onLocationChanged(List, IRemoteCallback)`; apps that still miss it fall
+  back to `getLastKnownLocation`/listeners, which serve live spoofed values
+- client-only hooks (GNSS/NMEA and the scoped-process Wi-Fi/cell class
+  hooks) read boot-time configuration; changing those toggles requires
+  restarting the target app
 - live tile download was not visually verified (validation Wi-Fi was behind
   an unauthenticated captive portal); the pipeline is configured and works as
   soon as the device has internet
@@ -92,7 +100,9 @@ Hooker classes use the Kotlin pattern
 Material 3 with a teal scheme: status header card, four tabs (地图 / 参数 /
 路线·收藏 / 诊断), card sections, Material switches, styled buttons, and a
 collapsible "高级设置" section on the params tab. The app has an adaptive
-launcher icon.
+launcher icon. The map tab is a full-bleed map with floating controls (search
+card, zoom/recenter buttons, bottom action card) and a draggable target
+marker; a touch wrapper keeps the pager from stealing map gestures.
 
 Map sources default to AMap (`webst0X.is.autonavi.com`, reachable from
 mainland China without a proxy; tiles drawn in GCJ-02, picked coordinates are
@@ -154,3 +164,5 @@ dev.ghostloc.offline  dev.ghostloc.probe  dev.ghostloc.demo
 - Work log: [docs/TRACEABILITY.md](docs/TRACEABILITY.md)
 - Device report: [docs/DEVICE_TEST_REPORT.md](docs/DEVICE_TEST_REPORT.md)
 - Plan: [docs/REPLICATION_PLAN.md](docs/REPLICATION_PLAN.md)
+- Original-vs-offline structural comparison and port backlog:
+  [docs/GHOSTMAPX_COMPARISON.md](docs/GHOSTMAPX_COMPARISON.md)
