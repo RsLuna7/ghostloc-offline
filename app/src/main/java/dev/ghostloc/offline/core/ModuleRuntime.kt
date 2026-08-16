@@ -46,11 +46,18 @@ object ModuleRuntime {
         return prefs
     }
 
+    /**
+     * Effective settings for the hook layer: the live [StateStore] overlay
+     * (written by system_server on every UI sync) merged over the boot-time
+     * remote preferences. The returned view is read-only; writes go through
+     * [Bridge].
+     */
     fun prefs(): SharedPreferences? {
-        val current = remotePrefs
-        if (current != null) {
-            return current
-        }
+        val remote = remotePrefs ?: remotePrefsOrNull() ?: return null
+        return MergedPrefs(remote)
+    }
+
+    private fun remotePrefsOrNull(): SharedPreferences? {
         val bridge = bridge ?: return null
         val prefs = bridge.getRemotePreferences(Prefs.GROUP)
         remotePrefs = prefs

@@ -55,6 +55,10 @@ object DeepServiceHooks {
                     ServiceTraceHooker::class.java
                 name == "reportLocation" ->
                     ServiceReportLocationHooker::class.java
+                // Server side of the UI command bridge: this is where the
+                // process has the privileges to persist state for all hooks.
+                name == "sendExtraCommand" && className == "com.android.server.location.LocationManagerService" ->
+                    ServiceExtraCommandHooker::class.java
                 name == "onTransact" && className == "android.location.ILocationManager\$Stub" ->
                     ServiceTraceHooker::class.java
                 else -> null
@@ -235,6 +239,33 @@ class ServiceTraceHooker : XposedInterface.Hooker {
         @JvmStatic
         fun before(callback: XposedInterface.BeforeHookCallback) {
             HookSupport.logHit(callback.member, "service trace uid=" + Binder.getCallingUid())
+        }
+    }
+}
+
+/**
+ * Receives the UI's bridge commands inside system_server. Running here means
+ * the state file write in Bridge.handle has system privileges, and skipping
+ * the original implementation avoids it rejecting the unknown "ghostloc"
+ * provider.
+ */
+class ServiceExtraCommandHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            val args = callback.args ?: return
+            if (args.size < 2 || args[0] != dev.ghostloc.offline.core.ModuleRuntime.BRIDGE_PROVIDER) {
+                return
+            }
+            val command = args[1]?.toString() ?: return
+            var bundle: android.os.Bundle? = null
+            for (arg in args) {
+                if (arg is android.os.Bundle) {
+                    bundle = arg
+                }
+            }
+            dev.ghostloc.offline.core.Bridge.handle(command, bundle)
+            callback.returnAndSkip(true)
         }
     }
 }

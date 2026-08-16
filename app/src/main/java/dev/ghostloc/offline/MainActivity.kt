@@ -128,14 +128,14 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
 
     // ---- UiActions ----
 
-    override fun prefs(): SharedPreferences {
-        val current = service ?: ModuleApplication.currentService()
-        return if (current != null) {
-            current.getRemotePreferences(Prefs.GROUP)
-        } else {
-            localPrefs()
-        }
-    }
+    /**
+     * On this framework (Vector/LSPosed) the hook layer reads the module
+     * app's own `shared_prefs/settings.xml` directly, while the libxposed
+     * service remote-prefs API persists to a separate database the hooks
+     * never see. Writing anything other than this local file would split
+     * the UI and hook state apart, so both reads and writes go through it.
+     */
+    override fun prefs(): SharedPreferences = localPrefs()
 
     override fun localPrefs(): SharedPreferences {
         return getSharedPreferences(Prefs.GROUP, Context.MODE_PRIVATE)
@@ -207,7 +207,12 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
                 .putString(Prefs.LAST_STATUS, if (active) (if (routePaused) "route-paused" else "started") else "stopped")
                 .apply()
 
-            sendBridgeCommand(if (active) "start" else "stop", lat, lon, speed, altitude, accuracy, bearing)
+            sendSyncCommand(
+                active = active, startedAt = startedAt, lat = lat, lon = lon,
+                speed = speed, altitude = altitude, accuracy = accuracy, bearing = bearing,
+                routeJson = routeJson, favoritesJson = favoritesJson,
+                routePaused = routePaused, pauseElapsed = pauseElapsed,
+            )
             ConfigDraft.routeJsonText = JsonModels.routeForDisplay(routeJson)
             ConfigDraft.favoritesJsonText = JsonModels.favoritesForDisplay(favoritesJson)
             refreshAll()
@@ -371,26 +376,56 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
     }
 
     /**
-     * Invoked through reflection: the public SDK signature returns void on
-     * most API levels, so calling it directly couples us to one platform jar.
+     * Pushes the complete configuration through the bridge command channel.
+     * Invoked via reflection: the public SDK signature of sendExtraCommand
+     * returns void on most API levels, so calling it directly would couple us
+     * to one platform jar. The hook layer only sees writes that arrive through
+     * this channel, so it must carry every setting, not just the coordinates.
      */
-    private fun sendBridgeCommand(
-        command: String,
+    private fun sendSyncCommand(
+        active: Boolean,
+        startedAt: Long,
         lat: Double,
         lon: Double,
         speed: Float,
         altitude: Double,
         accuracy: Float,
         bearing: Float,
+        routeJson: String,
+        favoritesJson: String,
+        routePaused: Boolean,
+        pauseElapsed: Long,
     ) {
         try {
             val bundle = Bundle().apply {
+                putBoolean("active", active)
+                putLong("started_at", startedAt)
                 putDouble("lat", lat)
                 putDouble("lon", lon)
                 putDouble("speed", speed.toDouble())
                 putDouble("altitude", altitude)
                 putDouble("accuracy", accuracy.toDouble())
                 putDouble("bearing", bearing.toDouble())
+                putBoolean("movement", ConfigDraft.movement)
+                putBoolean("wifi_shield", ConfigDraft.wifiShield)
+                putBoolean("cell_shield", ConfigDraft.cellShield)
+                putBoolean("mock_shield", ConfigDraft.mockShield)
+                putBoolean("nr_enabled", ConfigDraft.nrEnabled)
+                putBoolean("nmea_enabled", ConfigDraft.nmeaEnabled)
+                putBoolean("agps_enabled", ConfigDraft.agpsEnabled)
+                putBoolean("vendor_hooks_enabled", ConfigDraft.vendorHooksEnabled)
+                putInt("gnss_sat_count", ConfigDraft.intOf(ConfigDraft.gnssSatText, Prefs.DEFAULT_GNSS_SAT_COUNT))
+                putString("route_points", routeJson)
+                putBoolean("route_loop", ConfigDraft.routeLoop)
+                putBoolean("route_auto_bearing", ConfigDraft.routeAutoBearing)
+                putBoolean("route_paused", routePaused)
+                putLong("route_pause_elapsed_ms", pauseElapsed)
+                putString("favorites", favoritesJson)
+                putString("cell_mcc", ConfigDraft.mccText)
+                putString("cell_mnc", ConfigDraft.mncText)
+                putString("cell_country_iso", ConfigDraft.countryText)
+                putString("cell_operator_name", ConfigDraft.operatorText)
+                putString("last_status", if (active) "started" else "stopped")
             }
             val manager = getSystemService(Context.LOCATION_SERVICE)
             val method = LocationManager::class.java.getMethod(
@@ -399,10 +434,10 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
                 String::class.java,
                 Bundle::class.java,
             )
-            method.invoke(manager, "ghostloc", command, bundle)
-            Log.i("GhostLocApp", "bridge command=$command sent")
+            method.invoke(manager, "ghostloc", "sync", bundle)
+            Log.i("GhostLocApp", "bridge sync sent active=$active")
         } catch (throwable: Throwable) {
-            Log.i("GhostLocApp", "bridge command failed=$command " + throwable.javaClass.simpleName)
+            Log.i("GhostLocApp", "bridge sync failed " + throwable.javaClass.simpleName)
         }
     }
 
