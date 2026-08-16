@@ -6,3 +6,6 @@ local.properties
 *.apk
 *.aab
 *.png
+
+# local debug artifacts (screenshots, unpacked apks, tile samples)
+artifacts/
