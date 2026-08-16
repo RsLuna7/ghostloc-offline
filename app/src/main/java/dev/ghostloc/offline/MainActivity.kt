@@ -11,6 +11,8 @@ import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import com.google.android.material.tabs.TabLayoutMediator
@@ -69,6 +71,7 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applySystemBarInsets()
 
         binding.pager.adapter = TabsAdapter(this)
         binding.pager.offscreenPageLimit = 3
@@ -298,6 +301,26 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
     }
 
     // ---- internals ----
+
+    /**
+     * targetSdk 35 enforces edge-to-edge: the window extends behind the
+     * status bar, cutout, and gesture bar, so the root must pad itself from
+     * the reported insets or the top text and bottom buttons sit under the
+     * system bars. Keyboard insets are included so bottom controls rise above
+     * the IME.
+     */
+    private fun applySystemBarInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(binding.rootLayout) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.ime()
+            )
+            android.util.Log.i("GhostLocApp", "insets applied t=${bars.top} b=${bars.bottom} l=${bars.left} r=${bars.right}")
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+    }
 
     private fun loadSettings() {
         val prefs = prefs()
