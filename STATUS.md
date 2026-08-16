@@ -1,5 +1,7 @@
 # GhostLoc Offline — 当前状态
 
-- **位置**：P0 五项代码已落地；`:app:assembleDebug` + `:probe-app:assembleDebug` 已通过。
-- **卡住**：真机未验证。system_server / bluetooth 要 reboot 后才加载新 hook。
-- **下一步**：装包重启 → probe 看 `gnss_meas_registered` / `test_provider_present` + logcat 核对 hook 安装与命中 → 通过后开 P1（微抖动 / extras / 第三方 SDK）。
+- **位置**：P0 五项 + P1#6/#7（微抖动 / GNSS extras / makeComplete）已落地并真机验证（2026-08-16 深夜，两轮 install/reboot/probe）。
+- **本轮附带修复**：`remap()` 防重入守卫（对齐原版 `d()`，防微抖动叠加）；`overwrite()` 保留原 extras；`getCurrentLocation` 的 `ILocationCallback.onLocationChanged(LocationResult, IRemoteCallback)` 分发形态（此前 gps/fused 均返回 null，已验证修复）。
+- **BLE**：蓝牙开启时 `ble service hooks installed=8`（Android 15 上 `ScanManager` 实际在 `le_scan` 包，由别名表命中；`GattService`/`GattNativeInterface` 方法名漂移装 0 个，入口+投递链路已封住）；验证后蓝牙已恢复关闭。
+- **卡住**：无。
+- **下一步**：P1 剩余——#8 第三方 SDK hook（腾讯/高德/百度，scoped 进程）、#9 `TelephonyRegistry#notifyCellLocation*` + `listen` 监听器包装、#10 零散小面（`isScanAlwaysAvailable`/`requestListenerFlush`/PassiveProvider）、#11 SystemProperties 状态镜像；之后 P2 可选项。

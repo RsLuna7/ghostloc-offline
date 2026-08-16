@@ -13,6 +13,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.random.Random
 
 /** Computes the spoofed location for each hook hit from the current settings. */
 object SpoofState {
@@ -46,8 +47,19 @@ object SpoofState {
             )
         }
         val location = Location(state.provider)
-        location.latitude = state.latitude
-        location.longitude = state.longitude
+        // Per-output micro-drift: uniform 0..accuracy/15 m along bearing±45°
+        // (random side), matching the original's per-injection jitter. The
+        // FAKED_EXTRA mark is what keeps rewrite layers from stacking another
+        // offset on a location that was already generated here.
+        val driftAmpMeters = state.accuracy / 15.0
+        val driftBearing = state.bearing + if (Random.nextBoolean()) 45.0f else -45.0f
+        val drifted = GeoMath.moveDistance(
+            state.latitude, state.longitude,
+            driftBearing,
+            if (driftAmpMeters > 0.0) Random.nextDouble(0.0, driftAmpMeters) else 0.0,
+        )
+        location.latitude = drifted[0]
+        location.longitude = drifted[1]
         location.speed = state.speed
         location.altitude = state.altitude
         location.accuracy = state.accuracy
@@ -59,7 +71,15 @@ object SpoofState {
         location.setBearingAccuracyDegrees(1.0f)
         val extras = location.extras ?: Bundle()
         extras.putBoolean(ModuleRuntime.FAKED_EXTRA, true)
+        // Some apps read GNSS-look numbers from extras instead of GnssStatus.
+        extras.putInt("satellites", Random.nextInt(8, 46))
+        extras.putInt("maxCn0", Random.nextInt(30, 51))
+        extras.putInt("meanCn0", Random.nextInt(20, 31))
         location.extras = extras
+        try {
+            Location::class.java.getMethod("makeComplete").invoke(location)
+        } catch (_: Throwable) {
+        }
         return location
     }
 

@@ -155,10 +155,12 @@ object DeepServiceHooks {
 
     /**
      * The service-side `getCurrentLocation` callbacks are binder proxies of
-     * `ILocationListener`, whose delivery method is
-     * `onLocationChanged(List<Location>, IRemoteCallback)` — a shape the
+     * `ILocationListener`/`ILocationCallback`, whose delivery methods take the
+     * payload plus an `IRemoteCallback` completion token — shapes the
      * single-argument attempts above never match, which is why
-     * `getCurrentLocation` used to come back null while spoofing.
+     * `getCurrentLocation` used to come back null while spoofing. The payload
+     * itself is `List<Location>` for listeners but `LocationResult` for the
+     * `ILocationCallback` shape `getCurrentLocation` uses.
      */
     private fun tryDispatchBinderLocationList(target: Any, location: Location): Boolean {
         var current: Class<*>? = target.javaClass
@@ -167,13 +169,17 @@ object DeepServiceHooks {
                 if (method.name != "onLocationChanged" || method.parameterCount != 2) {
                     continue
                 }
-                val types = method.parameterTypes
-                if (!List::class.java.isAssignableFrom(types[0])) {
-                    continue
+                val first = method.parameterTypes[0]
+                val payload: Any? = when {
+                    List::class.java.isAssignableFrom(first) -> listOf(location)
+                    first.name == "android.location.LocationResult" ->
+                        makeLocationResult(location) ?: continue
+                    first == Location::class.java -> location
+                    else -> continue
                 }
                 return try {
                     method.isAccessible = true
-                    method.invoke(target, listOf(location), null)
+                    method.invoke(target, payload, null)
                     true
                 } catch (throwable: Throwable) {
                     ModuleRuntime.log("binder list dispatch failed", throwable)

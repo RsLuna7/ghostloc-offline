@@ -83,6 +83,12 @@ object BasicLocationHooks {
 
     /** Fresh spoofed Location, marked so later rewrite layers skip it. */
     fun remap(location: Location?): Location {
+        // Already-spoofed inputs pass through untouched, like the original's
+        // central rewrite function; without this, the micro-drift applied in
+        // SpoofState.makeLocation would stack on every set/parcel pass.
+        if (location != null && alreadySpoofed(location)) {
+            return location
+        }
         val provider = location?.provider
         val spoofed = SpoofState.makeLocation(provider)
         if (location != null) {
@@ -91,6 +97,15 @@ object BasicLocationHooks {
             }
             if (location.elapsedRealtimeNanos > 0L) {
                 spoofed.elapsedRealtimeNanos = location.elapsedRealtimeNanos
+            }
+            location.extras?.let { source ->
+                // Keep the original fix's extras (e.g. framework satellite
+                // fields) under our own synthesized keys, the way the original
+                // preserved them when rewriting a real location.
+                val merged = Bundle()
+                merged.putAll(source)
+                spoofed.extras?.let { merged.putAll(it) }
+                spoofed.extras = merged
             }
         }
         mark(spoofed)

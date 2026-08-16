@@ -31,7 +31,7 @@
 |---|---|---|---|
 | `LocationManagerService#getLastLocation` | ● after 注入（null 也新建） | ● before 直接返回伪造 | 新版形态更强 |
 | `#requestLocationUpdates` / `#registerLocationListener` | ● 监听器入队（`linkToDeath`），注册后立即推一条伪造位置 | ● after 立即派发伪造位置 | 新版无监听器队列（见 §5-B4） |
-| `#getCurrentLocation` | ● before 钩住 Transport/Callback 的 `onLocation` 并当场回调 | ● after 派发 binder 监听器（含 `onLocationChanged(List,IRemoteCallback)` 形态，2026-08-16 修复） | 机制相当 |
+| `#getCurrentLocation` | ● before 钩住 Transport/Callback 的 `onLocation` 并当场回调 | ● after 派发 binder 监听器（`onLocationChanged(List/LocationResult, IRemoteCallback)` 两种形态；LocationResult 形态是 `getCurrentLocation` 的 `ILocationCallback` 实际形状，2026-08-16 夜修复并真机验证） | 机制相当 |
 | `#removeUpdates`/`#unregisterLocationListener` | ● 出队 | ◐ 仅日志 | 新版无队列故无需出队 |
 | `#sendExtraCommand`（桥） | ● 14 条命令 | ● sync/全量 | 命令模型不同（§4） |
 | `#isProviderEnabled(ForUser)` | ● gps/network 恒 true；`"ghostmapx"` 恒 true；fused 看开关 | ● gps/network 恒 true（无 ghostmapx provider，fused 不强制） | 2026-08-16 P0 已移植 |
@@ -98,8 +98,8 @@
 | 注入对象显式 `setMock(false)` | ● | ●（新建即非 mock） | 一致 |
 | `Geocoder` 改写 | ● 参数改坐标 / 结果改地址 | ● AddressSynth 全合成 | 新版更强（原版 getFromLocationName 实为空 hook） |
 | provider 改名 network→gps | ● | ○ 按请求原 provider 返回 | P2：原版意图是统一 provider 指纹；新版按请求返回更自然，可选开关 |
-| 防重复注入标记（extras `ghostmapx_faked`） | ● | ○ 无标记 | 与微抖动相关（见 §3），P1 随微抖动一起评估 |
-| `makeComplete()`（API 33+ isComplete） | ● | ○ | P1 一行补齐，防系统层丢"不完整"位置 |
+| 防重复注入标记（extras `ghostmapx_faked`/`ghostloc_faked`） | ● | ● `makeLocation` 统一打标，`remap` 入口短路防叠加（2026-08-16 已移植） | 已一致；标记随 extras 对 app 可见，两版行为相同 |
+| `makeComplete()`（API 33+ isComplete） | ● | ● 反射调用、失败静默（2026-08-16 已移植） | 已一致 |
 | 测试 provider 通道封锁 | ● | ● | 2026-08-16 P0 已移植 |
 | 第三方定位 SDK 对抗（`Jo.l`）：腾讯 `TencentNLPManager` 全 Location 方法、高德 `NetworkLocationManager#onSendExtraCommand`/`updateOffLocEnable`、百度 `LocationClient#requestNLPNormal`（改坐标+清 buildingID/addrStr） | ● | ○ | **待移植 P1**：用户把目标 app（如 QQ）加 scope 后即生效，等于 SDK 层双保险 |
 | UI"回到真实位置"快照（80m/120s 污染判定） | ● | ○ | P2 产品功能 |
@@ -110,10 +110,10 @@
 
 | 机制 | 原版 | 新版 | 结论 |
 |---|---|---|---|
-| 位置微抖动 | ● 每次输出在 `±accuracy/15 m`（≈1.67m@25m）内、bearing±45° 方向随机偏移，且写 `ghostmapx_faked` 标记防二次叠加 | ○ 坐标恒定（仅 accuracy/altitude **字段**有正弦抖动参数） | **待移植 P1**：输出级微漂移是"活的位置"的关键特征 |
+| 位置微抖动 | ● 每次输出在 `0..accuracy/15 m` 内沿 bearing±45°（随机侧）偏移，`ghostmapx_faked` 标记防二次叠加 | ● 同款语义已移植（幅度/方向/防叠加标记一致；2026-08-16 真机实测 6 采样 spread 1.3–1.4m @acc≈22.5） | 已一致 |
 | 速度 | 标量 + `set_speed_amp` 均匀噪声 ±amp；合成 0 时强制 1.2 m/s（步行下限） | 路线插值速度 + `speedVariation` 正弦波动（0–0.75），无下限 | 新版模型更强；**1.2 m/s 下限可做成开关移植（P2）** |
 | bearing | `h%360`；为 0 时以 1.0 充当 bearingAccuracy，避免恒零特征 | 路线自动方向角 / 手填 | P2 微调 |
-| GNSS extras | `satellites`=8–45、`maxCn0`=30–50、`meanCn0`=20–30 随机写入 Location extras | ○ extras 为空（星况在 GnssStatus 层合成） | P1：部分 app 读 `location.extras["satellites"]`，一行补齐 |
+| GNSS extras | `satellites`=8–45、`maxCn0`=30–50、`meanCn0`=20–30 随机写入 Location extras | ● 同区间随机写入（GnssStatus 层合成仍保留；2026-08-16 真机 6/6 采样可见） | 已一致 |
 | 海拔 | 0 时回退 80m；API 34+ MSL 同步 | 可配 + 正弦抖动 | 新版更强 |
 | 时间戳 | 保留原 Location 的 time/elapsedRealtimeNanos（连续性） | 恒取当前时间 | 改写真实位置的场景下原版更优（P2；纯合成场景无差） |
 | 路线/移动 | ○ 单点，速度只是字段 | ● 插值引擎 | **新版独有且更强** |
@@ -143,8 +143,13 @@
 
 ### P0 —— 对抗面一致性（影响"所有 app 看到一致的假象"）
 
-> 2026-08-16：五项均已落地。实现见 `BasicLocationHooks` / `DeepServiceHooks` / `BleServiceHooks`。
-> 真机验证仍待 reboot 后 probe + 日志核对（见 TRACEABILITY）。
+> 2026-08-16：五项均已落地，并当晚真机验证通过（安装计数 + 命中日志 +
+> probe 行为，见 TRACEABILITY）。
+> BLE 注意：本机 Android 15 上原版类名有漂移——`com.android.bluetooth.gatt.ScanManager`
+> 实际位于 `com.android.bluetooth.le_scan.ScanManager`（别名表命中）；
+> `GattService`/`GattNativeInterface` 方法名已变化（匹配 0 个），但扫描入口
+> （`le_scan.ScanManager#startScan`）与结果投递（`IScannerCallback$Stub$Proxy` ×3）
+> 已封住，蓝牙开启时共安装 8 个 hook。
 
 | # | 项 | 原版实现锚点 | 状态 |
 |---|---|---|---|
@@ -156,10 +161,13 @@
 
 ### P1 —— 拟真细节与纵深
 
+> 2026-08-16 深夜：#6、#7 已落地并真机验证（微抖动 spread 1.3–1.4m、
+> satellites extras 6/6、makeComplete 反射接入）。
+
 | # | 项 | 说明 |
 |---|---|---|
-| 6 | 输出级位置微抖动 | 每次生成 Location 时 ±accuracy/15m 随机偏移 + `ghostloc_faked` extras 防叠加标记 |
-| 7 | Location extras 补齐 | satellites/maxCn0/meanCn0 随机 + `makeComplete()` |
+| 6 | 输出级位置微抖动 | ✅ 已移植：`0..accuracy/15 m` 沿 bearing±45° 随机侧偏移 + `ghostloc_faked` 防叠加标记（`remap` 入口短路，等价原版 `d()` 的守卫） |
+| 7 | Location extras 补齐 | ✅ 已移植：satellites/maxCn0/meanCn0 随机 + `makeComplete()`；`overwrite` 保留原 extras |
 | 8 | 第三方 SDK hook 组（scoped 进程） | TencentNLPManager / AMap NetworkLocationManager / Baidu LocationClient |
 | 9 | `TelephonyRegistry#notifyCellLocation*` + `listen` 监听器包装 | 推送型小区位置也合成 |
 | 10 | 服务端 `isScanAlwaysAvailable`→false、`requestListenerFlush`、`PassiveLocationProvider#updateLocation` | 零散小面 |
@@ -193,5 +201,7 @@ Wi-Fi 扫描、phone 进程基站查询、GNSS 原始测量、BLE 扫描、测�
 1. **输出拟真度**（微抖动/extras/时间戳连续性）——P1
 2. **产品细节**（过期、快照回真、手动广播）——P2
 
-P0 真机验证通过后，按 P1 继续移植，即可在保留新版路线 / GNSS 合成 / 基站合成 /
-离线化优势的同时，把输出拟真度也对齐原版。
+P0 已于 2026-08-16 真机验证通过；P1 的微抖动 / GNSS extras / makeComplete 同日对齐。
+剩余 P1 差异集中在第三方 SDK hook（腾讯/高德/百度）、TelephonyRegistry 推送包装与
+SystemProperties 状态镜像；完成后即可在保留新版路线 / GNSS 合成 / 基站合成 /
+离线化优势的同时，把输出拟真度与纵深全面对齐原版。

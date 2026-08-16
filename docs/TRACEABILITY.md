@@ -895,3 +895,71 @@ reboot so system_server / bluetooth pick up the new hooks, then probe +
 - `ble service hooks installed` / `ble scan swallowed`
 - probe `gnss_meas_registered=false` and `test_provider_present=false`
   while spoofing is active
+
+## 2026-08-16 (deep night) — P0 device verification, P1 output realism, getCurrentLocation fix
+
+Review of the P0 port against the original decompilation found one gap that
+had to close before P1: the original's central rewrite function
+(`AbstractC0630px.d`, jadx AbstractC0630px.java:93-95) short-circuits on the
+`ghostmapx_faked` extras mark, but the new `remap()` had no such guard —
+harmless while output was deterministic, but exactly the bug that would stack
+jitter once P1 micro-drift landed. `overwrite()` also dropped the original
+fix's extras instead of preserving them like the original.
+
+Changes:
+
+- `BasicLocationHooks.remap`: already-marked inputs pass through untouched
+  (guard moved to the entry point, mirroring `d()`'s architecture); source
+  extras are merged under the synthesized keys so real-fix extras survive a
+  rewrite
+- `SpoofState.makeLocation`: per-output micro-drift ported with the exact
+  original semantics — uniform `0..accuracy/15` meters along `bearing ±45°`
+  (random side, spherical meter→degree conversion via `GeoMath.moveDistance`),
+  plus `satellites`(8–45)/`maxCn0`(30–50)/`meanCn0`(20–30) random extras and
+  reflective `makeComplete()` (silent skip, same defensive shape as the
+  original's `XposedHelpers.callMethod` call)
+- `DeepServiceHooks.tryDispatchBinderLocationList`: generalized the binder
+  callback dispatch to accept `LocationResult` payloads. The previous entry's
+  claim that the `List`-shape fix repaired `getCurrentLocation` was wrong:
+  `getCurrentLocation` delivers through `ILocationCallback.onLocationChanged(
+  LocationResult, IRemoteCallback)`, whose first parameter is a
+  `LocationResult`, not a `List` — the List shape only serves the
+  `registerLocationListener` path. Round-1 probe confirmed
+  `public_current_location` still null; after the fix both gps and fused
+  `getCurrentLocation` return spoofed coordinates
+- probe-app: `probeJitter` samples `getLastKnownLocation` ×6 and reports
+  spread + satellites-extras visibility (log-only, does not affect PASS)
+
+Device verification (two install/reboot cycles, OnePlus7 / Android 15):
+
+- install counts from LSPosed module log (`/data/adb/lspd/log/modules_*.log`):
+  `basic location hooks installed=2` (Location writeToParcel + set),
+  `LocationResult hooks installed=4`, LMS deep hooks 14,
+  `provider enabled forced` hit on `isProviderEnabledForUser`
+- behavioral hits: `service rejected` on `addGnssMeasurementsListener` /
+  `addTestProvider` / `removeTestProvider`; `location parcel rewritten` on
+  `Location#writeToParcel(Parcel,int)`
+- probe: `probe_status=PASS`, `jitter_samples=6 spread=1.31–1.43m
+  satellites_extras=6/6` (accuracy ≈22.5 ⇒ max drift 1.5 m, spread within
+  expected 2×radius bound), listener path spoofed with visible per-output
+  drift, `test_provider_present=false`
+- `gnss_meas_registered=true` in the probe report is expected: the hooked
+  LMS method returns void, so the neutral skip cannot surface as `false` to
+  the client API; the server-side rejection hit log is the actual evidence,
+  and no measurement callbacks are ever delivered
+- BLE: bluetooth was enabled temporarily (`svc bluetooth enable`) to start
+  `com.android.bluetooth`; module log shows `ble service hooks installed=8`:
+  `com.android.bluetooth.le_scan.ScanManager#startScan` ×1 (the AOSP-15
+  location of ScanManager — the original `gatt.ScanManager` path is missing
+  on this ROM), `IScannerCallback$Stub$Proxy` delivery ×3,
+  `BluetoothLeScanner#startScan` ×4. `GattService`/`GattNativeInterface`
+  matched 0 methods (method names drifted); scan entry + result delivery
+  are covered. Bluetooth restored to off afterwards
+- `getCurrentLocation` after the LocationResult dispatch fix:
+  `public_current_location=50.249030,31.720022` and
+  `fused_current_location=50.249022,31.720006 provider=fused` (both were
+  null before)
+
+Note on evidence capture: boot-time logcat rotates out before adb is up, so
+install counts were read from the LSPosed persistent module log via root
+(`su -c grep ... /data/adb/lspd/log/modules_*.log`), not logcat.

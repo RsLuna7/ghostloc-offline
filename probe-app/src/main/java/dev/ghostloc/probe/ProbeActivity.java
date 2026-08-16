@@ -134,6 +134,7 @@ public final class ProbeActivity extends Activity {
                     location.getLongitude(),
                     isMock(location),
                     location.getProvider()));
+            probeJitter(manager);
             Location fusedLocation = null;
             try {
                 fusedLocation = manager.getLastKnownLocation(LocationManager.FUSED_PROVIDER);
@@ -182,6 +183,43 @@ public final class ProbeActivity extends Activity {
             probeBinderReflection(manager);
         } catch (Throwable throwable) {
             report.append("location_error=").append(throwable.getClass().getSimpleName()).append("\n");
+        }
+    }
+
+    /**
+     * Repeated last-known reads while spoofing each return a freshly generated
+     * location, so the spread across samples shows the per-output micro-drift
+     * and the synthesized GNSS extras reaching apps. With spoofing inactive
+     * the cached real fix repeats and the spread stays 0.
+     */
+    private void probeJitter(LocationManager manager) {
+        try {
+            Location first = null;
+            float maxSpread = 0f;
+            int withSatExtras = 0;
+            final int samples = 6;
+            for (int i = 0; i < samples; i++) {
+                Location sample = manager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                if (sample == null) {
+                    break;
+                }
+                if (first == null) {
+                    first = new Location(sample);
+                } else {
+                    float[] dist = new float[1];
+                    Location.distanceBetween(first.getLatitude(), first.getLongitude(),
+                            sample.getLatitude(), sample.getLongitude(), dist);
+                    maxSpread = Math.max(maxSpread, dist[0]);
+                }
+                if (sample.getExtras() != null && sample.getExtras().containsKey("satellites")) {
+                    withSatExtras++;
+                }
+            }
+            Log.i(TAG, String.format(Locale.US,
+                    "jitter_samples=%d spread=%.2fm satellites_extras=%d/%d",
+                    first == null ? 0 : samples, maxSpread, withSatExtras, samples));
+        } catch (Throwable throwable) {
+            Log.i(TAG, "jitter_samples_error=" + throwable.getClass().getSimpleName());
         }
     }
 
