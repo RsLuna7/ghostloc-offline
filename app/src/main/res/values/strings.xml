@@ -43,6 +43,9 @@
 
     <!-- Params -->
     <string name="section_location">位置</string>
+    <string name="section_advanced">高级设置</string>
+    <string name="advanced_expand">高级设置 ▾</string>
+    <string name="advanced_collapse">收起高级设置 ▴</string>
     <string name="hint_lat">纬度</string>
     <string name="hint_lon">经度</string>
     <string name="hint_speed">速度 m/s</string>

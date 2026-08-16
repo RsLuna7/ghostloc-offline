@@ -373,6 +373,9 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
             prefs.getBoolean(Prefs.MOVEMENT, false) -> getString(R.string.status_active_moving)
             else -> getString(R.string.status_active)
         }
+        binding.runningStatus.setTextColor(
+            getColor(if (active) R.color.status_active else R.color.m3_on_primary_container)
+        )
     }
 
     /**

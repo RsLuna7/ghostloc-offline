@@ -27,6 +27,12 @@ class ParamsFragment : Fragment(), ConfigDraft.Listener {
         val binding = FragmentParamsBinding.inflate(inflater, container, false)
         this.binding = binding
 
+        binding.advancedToggle.setOnClickListener {
+            val expanded = binding.advancedSection.visibility == View.VISIBLE
+            binding.advancedSection.visibility = if (expanded) View.GONE else View.VISIBLE
+            binding.advancedToggle.setText(if (expanded) R.string.advanced_expand else R.string.advanced_collapse)
+        }
+
         bindText(binding.latInput) { ConfigDraft.latText = it }
         bindText(binding.lonInput) { ConfigDraft.lonText = it }
         bindText(binding.speedInput) { ConfigDraft.speedText = it }
