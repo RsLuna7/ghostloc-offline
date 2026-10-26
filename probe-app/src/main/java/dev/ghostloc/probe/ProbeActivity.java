@@ -24,6 +24,7 @@ import android.telephony.CellIdentityNr;
 import android.telephony.CellInfo;
 import android.telephony.CellInfoLte;
 import android.telephony.CellInfoNr;
+import android.telephony.PhoneStateListener;
 import android.telephony.CellSignalStrengthLte;
 import android.telephony.CellSignalStrengthNr;
 import android.telephony.ServiceState;
@@ -78,12 +79,53 @@ public final class ProbeActivity extends Activity {
         probeSettings(report);
         probeWifi(report);
         probeTelephony(report);
+        maybeTestCellPush();
         String value = report.toString();
         Log.i(TAG, value);
         boolean ok = isGreenReport(value);
         Log.i(TAG, "probe_status=" + (ok ? "PASS" : "FAIL"));
         sendReportBroadcast(value, ok);
         output.setText(value);
+    }
+
+    /**
+     * Diagnostic hook for verifying the system_server cell-location push
+     * chain: registers a cell-location listener, drives one synthetic push
+     * through TelephonyRegistry, and reports what the listener received.
+     * The module's system_server hooks log their own hits alongside. Off
+     * unless launched with --ez test_cell_push true.
+     */
+    private void maybeTestCellPush() {
+        if (!getIntent().getBooleanExtra("test_cell_push", false)) {
+            return;
+        }
+        try {
+            TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+            final StringBuilder observation = new StringBuilder("none");
+            PhoneStateListener listener = new PhoneStateListener() {
+                @Override
+                public void onCellLocationChanged(android.telephony.CellIdentity identity) {
+                    observation.setLength(0);
+                    observation.append("identity=").append(identity);
+                }
+
+                @Override
+                public void onCellLocationChanged(Bundle location) {
+                    observation.setLength(0);
+                    observation.append("bundle=").append(location);
+                }
+            };
+            tm.listen(listener, PhoneStateListener.LISTEN_CELL_LOCATION);
+            Thread.sleep(1500);
+            LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            manager.sendExtraCommand("ghostloc", "test_cell_push", new Bundle());
+            Thread.sleep(1500);
+            tm.listen(listener, PhoneStateListener.LISTEN_NONE);
+            Log.i(TAG, "test_cell_push_sent=true");
+            Log.i(TAG, "cell_push_observation=" + observation);
+        } catch (Throwable t) {
+            Log.i(TAG, "test_cell_push_sent=false error=" + t.getClass().getSimpleName());
+        }
     }
 
     private boolean isGreenReport(String report) {

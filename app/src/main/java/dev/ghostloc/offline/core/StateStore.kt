@@ -42,6 +42,9 @@ object StateStore {
     /** Current overlay for this process (empty when the file is unreadable). */
     fun props(): Properties = readFromFile() ?: Properties()
 
+    /** Whether this process can read the state file (true inside system_server). */
+    fun fileReadable(): Boolean = readFromFile() != null
+
     private fun readFromFile(): Properties? {
         return try {
             val f = file
@@ -104,20 +107,37 @@ object StateStore {
 }
 
 /**
- * SharedPreferences view used by the hook layer: values from the live
- * [StateStore] win over the boot-time remote preferences. All values are
- * stored as strings in the overlay and parsed per requested type.
+ * SharedPreferences view used by the hook layer. Overlay precedence: the live
+ * [StateStore] file (readable only inside system_server), then the
+ * [LiveState] bridge pull (live values in every other hooked process), then
+ * the [PropMirror] properties (populated only on ROMs whose SELinux allows
+ * system_server to set them), then the boot-time remote preferences. All
+ * values are strings in the overlay layers and parsed per requested type.
  */
 class MergedPrefs(
     private val remote: SharedPreferences,
 ) : SharedPreferences {
 
-    private fun overlay(key: String): String? = StateStore.props().getProperty(key)
+    private fun overlay(key: String): String? {
+        StateStore.props().getProperty(key)?.let { return it }
+        if (!StateStore.fileReadable()) {
+            LiveState.props()[key]?.let { return it }
+        }
+        return PropMirror.prefValue(key)
+    }
 
-    private fun hasOverlay(key: String): Boolean = StateStore.props().containsKey(key)
+    private fun hasOverlay(key: String): Boolean = overlay(key) != null
 
     override fun getAll(): Map<String, *> {
         val result = HashMap<String, Any?>(remote.all)
+        for (prefKey in PropMirror.propKeys) {
+            PropMirror.prefValue(prefKey)?.let { result[prefKey] = it }
+        }
+        if (!StateStore.fileReadable()) {
+            for ((key, value) in LiveState.props()) {
+                result[key] = value
+            }
+        }
         for ((key, value) in StateStore.props()) {
             result[key as String] = value
         }

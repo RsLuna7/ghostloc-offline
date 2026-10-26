@@ -2,6 +2,7 @@ package dev.ghostloc.offline.synth
 
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.Bundle
 import android.telephony.AccessNetworkConstants
 import android.telephony.CellIdentity
 import android.telephony.CellIdentityLte
@@ -314,6 +315,27 @@ object CellSynth {
 
     private fun makeLteCellIdentity(profile: CellProfile): CellIdentityLte? {
         return makeLteCellInfo(profile)?.cellIdentity
+    }
+
+    /** LTE identity for hook layers that must hand out a CellIdentity-typed value. */
+    fun currentLteCellIdentity(): CellIdentityLte? = makeLteCellIdentity(currentCellProfile())
+
+    /**
+     * Legacy bundle-shaped cell location for the deprecated push/pull channel
+     * (`TelephonyRegistry#notifyCellLocation*`, `PhoneStateListener#
+     * onCellLocationChanged`, `TelephonyManager#getCellLocation`). The original
+     * shipped a fake CDMA bundle with the spoofed coordinates embedded; LTE
+     * identities carry no coordinates, so this mirrors the GSM key format with
+     * the same TAC/CI the structured synthesis uses, keeping every channel
+     * internally consistent.
+     */
+    fun makeCellLocationBundle(): Bundle {
+        val profile = currentCellProfile()
+        val bundle = Bundle()
+        bundle.putInt("lac", profile.lteTac)
+        bundle.putInt("cid", (profile.lteCi and 0x7fffffff).toInt())
+        bundle.putInt("psc", -1)
+        return bundle
     }
 
     private fun makeNrCellIdentity(profile: CellProfile): CellIdentityNr? {

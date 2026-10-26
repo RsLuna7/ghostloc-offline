@@ -50,13 +50,18 @@ object PhoneServiceHooks {
     }
 }
 
+/**
+ * Pull side of the legacy cell-location channel. Serves the same synthetic
+ * bundle the TelephonyRegistry push delivers, so polling and listening apps
+ * see one consistent cell (the original faked both channels with CDMA data).
+ */
 class CellLocationNullHooker : XposedInterface.Hooker {
     companion object {
         @JvmStatic
         fun before(callback: XposedInterface.BeforeHookCallback) {
             if (ModuleRuntime.cellShield()) {
                 HookSupport.logHit(callback.member, "phone cell location masked")
-                callback.returnAndSkip(null)
+                callback.returnAndSkip(dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle())
             }
         }
     }

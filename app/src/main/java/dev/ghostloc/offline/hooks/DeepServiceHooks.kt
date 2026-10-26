@@ -25,6 +25,7 @@ object DeepServiceHooks {
         "android.location.ILocationManager\$Stub",
         "com.android.server.location.provider.LocationProviderManager",
         "com.android.server.location.provider.AbstractLocationProvider",
+        "com.android.server.location.provider.PassiveLocationProvider",
         "com.android.server.location.gnss.GnssManagerService",
         "com.android.server.location.gnss.hal.GnssNative",
         "com.android.server.TelephonyRegistry",
@@ -66,6 +67,10 @@ object DeepServiceHooks {
                     ServiceTraceHooker::class.java
                 name == "reportLocation" ->
                     ServiceReportLocationHooker::class.java
+                // Passive provider re-broadcast: every other provider's fix is
+                // offered to passive listeners through this entry point.
+                name == "updateLocation" && className == "com.android.server.location.provider.PassiveLocationProvider" ->
+                    ServiceReportLocationHooker::class.java
                 name == "isProviderEnabled" || name == "isProviderEnabledForUser" ->
                     ServiceProviderEnabledHooker::class.java
                 name == "registerGnssStatusCallback" ->
@@ -89,6 +94,16 @@ object DeepServiceHooks {
                 className == "com.android.server.TelephonyRegistry" &&
                     (name == "notifyCellInfo" || name == "notifyCellInfoForSubscriber") ->
                     TelephonyCellNotifyHooker::class.java
+                // Same push channel for the deprecated bundle-shaped cell
+                // location (PhoneStateListener.LISTEN_CELL_LOCATION).
+                className == "com.android.server.TelephonyRegistry" &&
+                    (name == "notifyCellLocation" || name == "notifyCellLocationForSubscriber") ->
+                    TelephonyCellLocationNotifyHooker::class.java
+                // Wrap registered listener objects so their
+                // onCellLocationChanged delivery is rewritten too.
+                className == "com.android.server.TelephonyRegistry" &&
+                    (name == "listen" || name == "listenWithEventList") ->
+                    TelephonyListenHooker::class.java
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -104,11 +119,12 @@ object DeepServiceHooks {
                 val name = method.name
                 if (name == "getLastLocation" || name == "requestLocationUpdates" || name == "getCurrentLocation"
                     || name == "registerLocationListener" || name == "removeUpdates"
-                    || name == "reportLocation" || name == "onTransact"
+                    || name == "reportLocation" || name == "updateLocation" || name == "onTransact"
                     || name == "isProviderEnabled" || name == "isProviderEnabledForUser"
                     || name == "registerGnssStatusCallback"
                     || name == "addGnssMeasurementsListener" || name == "addGnssAntennaInfoListener"
-                    || name == "addTestProvider"
+                    || name == "addTestProvider" || name == "listen" || name == "listenWithEventList"
+                    || name == "notifyCellLocation" || name == "notifyCellLocationForSubscriber"
                 ) {
                     ModuleRuntime.log("deep method ${cls.name}#${ModuleRuntime.methodSignature(method)}")
                 }
@@ -213,6 +229,69 @@ object DeepServiceHooks {
             return candidate
         }
         return makeLocationResult(location) ?: candidate
+    }
+
+    /**
+     * Deterministic exercise of the cell-location push chain for device
+     * verification: resolves the TelephonyRegistry service and invokes
+     * `notifyCellLocationForSubscriber` with the current synthetic identity.
+     * The before-hook replaces the argument (logging the hit) and the
+     * original implementation delivers it to registered listeners, whose
+     * wrapped delivery methods log their own hits. Only meaningful in
+     * system_server; returns false everywhere else.
+     */
+    fun triggerCellLocationPush(): Boolean {
+        fun trace(step: String) {
+            ModuleRuntime.log("cell push trace $step")
+        }
+        return try {
+            val smClass = findClass(
+                DeepServiceHooks::class.java.classLoader, "android.os.ServiceManager",
+            ) ?: run { trace("no ServiceManager"); return false }
+            trace("sm ok")
+            val binder = tryStaticInvoke(smClass, "getService", arrayOf(String::class.java), arrayOf("telephony.registry"))
+                ?: run { trace("no binder"); return false }
+            trace("binder ok")
+            val stubClass = findClass(
+                DeepServiceHooks::class.java.classLoader,
+                "com.android.internal.telephony.ITelephonyRegistry\$Stub",
+            ) ?: run { trace("no stub class"); return false }
+            trace("stub ok")
+            val registry = tryStaticInvoke(stubClass, "asInterface", arrayOf(android.os.IBinder::class.java), arrayOf(binder))
+                ?: run { trace("no registry"); return false }
+            trace("registry ok")
+            val identity = dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
+                ?: run { trace("no identity"); return false }
+            trace("identity ok")
+            if (tryInvoke(
+                    registry, "notifyCellLocationForSubscriber",
+                    arrayOf(java.lang.Integer.TYPE, android.telephony.CellIdentity::class.java),
+                    arrayOf(0, identity),
+                )
+            ) {
+                trace("delivered 2-arg")
+                return true
+            }
+            trace("2-arg miss")
+            if (tryInvoke(
+                    registry, "notifyCellLocationForSubscriber",
+                    arrayOf(
+                        java.lang.Integer.TYPE,
+                        android.telephony.CellIdentity::class.java,
+                        java.lang.Boolean.TYPE,
+                    ),
+                    arrayOf(0, identity, false),
+                )
+            ) {
+                trace("delivered 3-arg")
+                return true
+            }
+            trace("3-arg miss")
+            false
+        } catch (throwable: Throwable) {
+            ModuleRuntime.log("cell push failed " + throwable.javaClass.simpleName, throwable)
+            false
+        }
     }
 
     private fun makeLocationResult(location: Location): Any? {
@@ -393,6 +472,109 @@ class TelephonyCellNotifyHooker : XposedInterface.Hooker {
             }
             if (replaced) {
                 HookSupport.logHit(callback.member, "telephony cell notify replaced")
+            }
+        }
+    }
+}
+
+/**
+ * Replaces the deprecated push-shaped cell location delivered to legacy
+ * `PhoneStateListener#onCellLocationChanged` registrants, the port of the
+ * original's fake-CDMA-bundle behavior. On Android 15 the payload is a
+ * `CellIdentity` (device log: `notifyCellLocationForSubscriber(int,
+ * CellIdentity[, boolean])`); older ROMs pushed a Bundle — both shapes are
+ * replaced with the matching synthetic value so push and pull stay
+ * consistent.
+ */
+class TelephonyCellLocationNotifyHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.cellShield()) {
+                return
+            }
+            val args = callback.args ?: return
+            var replaced = false
+            for (i in args.indices) {
+                val replacement: Any? = when (args[i]) {
+                    is android.os.Bundle -> dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
+                    is android.telephony.CellIdentity ->
+                        dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
+                    else -> null
+                }
+                if (replacement != null) {
+                    args[i] = replacement
+                    replaced = true
+                }
+            }
+            if (replaced) {
+                HookSupport.logHit(callback.member, "telephony cell location push replaced")
+            }
+        }
+    }
+}
+
+/**
+ * TelephonyRegistry#listen / #listenWithEventList: wraps every registered
+ * listener by hooking its `onCellLocationChanged` delivery method, the port of
+ * the original's I3 wrapper. Hooking the binder-proxy method in
+ * system_server rewrites the payload before it is marshalled to the app.
+ */
+class TelephonyListenHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.cellShield()) {
+                return
+            }
+            val method = callback.member as? java.lang.reflect.Method ?: return
+            val params = method.parameterTypes
+            val args = callback.args ?: return
+            for (i in params.indices) {
+                if (params[i].simpleName != "IPhoneStateListener") {
+                    continue
+                }
+                val listener = args.getOrNull(i) ?: continue
+                wrapListener(listener)
+            }
+        }
+
+        private fun wrapListener(listener: Any) {
+            var hooks = 0
+            for (declared in listener.javaClass.declaredMethods) {
+                if (declared.name != "onCellLocationChanged" || declared.parameterCount != 1) {
+                    continue
+                }
+                if (ModuleRuntime.hookMethodOnce(declared, CellLocationListenerHooker::class.java)) {
+                    hooks++
+                }
+            }
+            if (hooks > 0) {
+                ModuleRuntime.log("cell location listener wrapped ${listener.javaClass.name} hooks=$hooks")
+            }
+        }
+    }
+}
+
+/** Delivery-side rewrite installed by [TelephonyListenHooker]. */
+class CellLocationListenerHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            if (!ModuleRuntime.cellShield()) {
+                return
+            }
+            val args = callback.args ?: return
+            val payload = args.firstOrNull() ?: return
+            val replacement: Any? = when (payload) {
+                is android.os.Bundle -> dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
+                is android.telephony.CellIdentity ->
+                    dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
+                else -> null
+            }
+            if (replacement != null) {
+                args[0] = replacement
+                HookSupport.logHit(callback.member, "cell location listener delivery replaced")
             }
         }
     }

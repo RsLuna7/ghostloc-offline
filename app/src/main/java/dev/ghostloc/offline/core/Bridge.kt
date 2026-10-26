@@ -45,12 +45,35 @@ object Bridge {
                 ModuleRuntime.log("bridge query is_start=${ModuleRuntime.active()}")
                 return
             }
+            // Live-state pull for processes that cannot read the state file:
+            // the caller's Bundle is filled in place and returned over the
+            // inout binder argument (the writeback shape the original used
+            // for is_start).
+            "query" -> {
+                val props = StateStore.props()
+                for ((key, value) in props) {
+                    if (key is String && value is String) {
+                        data.putString(key, value)
+                    }
+                }
+                ModuleRuntime.log("bridge query answered keys=${props.size}")
+                return
+            }
+            // Diagnostics: drive one synthetic cell-location push through the
+            // real TelephonyRegistry so the replacement hooks can be verified
+            // on demand (the modem only pushes when the serving cell changes).
+            "test_cell_push" -> {
+                val delivered = dev.ghostloc.offline.hooks.DeepServiceHooks.triggerCellLocationPush()
+                ModuleRuntime.log("bridge test_cell_push delivered=$delivered")
+                return
+            }
             else -> return
         }
         if (mutations.isEmpty()) {
             return
         }
         if (StateStore.update(mutations)) {
+            PropMirror.sync(mutations)
             ModuleRuntime.log("bridge command handled=$command keys=${mutations.size}")
         } else {
             ModuleRuntime.log("bridge command observed=$command (state file not writable here)")
