@@ -103,13 +103,14 @@ public final class ProbeActivity extends Activity {
             TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
             final StringBuilder observation = new StringBuilder("none");
             PhoneStateListener listener = new PhoneStateListener() {
-                @Override
+                // No @Override: the CellIdentity overload never existed in the
+                // public API and the Bundle overload is deprecated, but the
+                // runtime still dispatches the Bundle shape on Android 14.
                 public void onCellLocationChanged(android.telephony.CellIdentity identity) {
                     observation.setLength(0);
                     observation.append("identity=").append(identity);
                 }
 
-                @Override
                 public void onCellLocationChanged(Bundle location) {
                     observation.setLength(0);
                     observation.append("bundle=").append(location);

@@ -4,14 +4,14 @@ plugins {
 
 android {
     namespace = "dev.ghostloc.offline"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.ghostloc.offline"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.4.2"
     }
 
     buildTypes {
@@ -51,7 +51,7 @@ kotlin {
 
 dependencies {
     compileOnly(project(":vector-api-stubs"))
-    implementation("io.github.libxposed:service:101.0.0")
+    implementation("io.github.libxposed:service:102.0.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")

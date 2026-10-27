@@ -12,7 +12,7 @@ object GeocoderHooks {
         try {
             for (method in Geocoder::class.java.declaredMethods) {
                 if (method.name == "getFromLocation" || method.name == "getFromLocationName") {
-                    ModuleRuntime.bridge?.hook(method, GeocoderHooker::class.java)
+                    ModuleRuntime.hook(method, GeocoderHooker)
                 }
             }
         } catch (throwable: Throwable) {
@@ -21,19 +21,15 @@ object GeocoderHooks {
     }
 }
 
-class GeocoderHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active() || !ModuleRuntime.mockShield()) {
-                return
-            }
-            if ((callback.member as? Method)?.returnType == Void.TYPE) {
-                AddressSynth.dispatchGeocodeListener(callback.args, AddressSynth.makeAddressList())
-                callback.returnAndSkip(null)
-            } else {
-                callback.returnAndSkip(AddressSynth.makeAddressList())
-            }
+object GeocoderHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active() || !ModuleRuntime.mockShield()) {
+            return chain.proceed()
         }
+        if ((chain.executable as? Method)?.returnType == Void.TYPE) {
+            AddressSynth.dispatchGeocodeListener(HookSupport.argArray(chain), AddressSynth.makeAddressList())
+            return null
+        }
+        return AddressSynth.makeAddressList()
     }
 }

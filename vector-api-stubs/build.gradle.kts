@@ -15,3 +15,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    compileOnly("androidx.annotation:annotation:1.8.1")
+    compileOnly("io.github.libxposed:annotation:1.0.0")
+}

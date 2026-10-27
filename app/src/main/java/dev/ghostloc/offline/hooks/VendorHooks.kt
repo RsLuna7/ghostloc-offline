@@ -43,14 +43,14 @@ object VendorHooks {
         for (method in cls.declaredMethods) {
             val name = method.name
             val returnType = method.returnType
-            val hooker: Class<out XposedInterface.Hooker>? = when {
+            val hooker: XposedInterface.Hooker? = when {
                 name == "chooseBestLocation" && returnType == Location::class.java ->
-                    VendorLocationReturnHooker::class.java
+                    VendorLocationReturnHooker
                 name == "onLocationChanged" ->
-                    VendorLocationArgHooker::class.java
+                    VendorLocationArgHooker
                 name == "reportBestLocationLocked" || name == "onSetRequest"
                     || name == "onFlush" || name == "start" || name == "stop" ->
-                    VendorTraceHooker::class.java
+                    VendorTraceHooker
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -62,47 +62,41 @@ object VendorHooks {
     }
 }
 
-class VendorLocationReturnHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            HookSupport.logHit(callback.member, "vendor location")
-            callback.returnAndSkip(SpoofState.makeLocation(LocationManager.FUSED_PROVIDER))
+object VendorLocationReturnHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        HookSupport.logHit(chain.executable, "vendor location")
+        return SpoofState.makeLocation(LocationManager.FUSED_PROVIDER)
     }
 }
 
-class VendorLocationArgHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val args = callback.args ?: return
-            val location = SpoofState.makeLocation(LocationManager.FUSED_PROVIDER)
-            var replaced = false
-            for (i in args.indices) {
-                if (args[i] is Location) {
-                    args[i] = location
-                    replaced = true
-                }
-            }
-            if (replaced) {
-                HookSupport.logHit(callback.member, "vendor callback")
+object VendorLocationArgHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
+        }
+        val location = SpoofState.makeLocation(LocationManager.FUSED_PROVIDER)
+        var replaced = false
+        val newArgs = chain.args.toTypedArray()
+        for (i in newArgs.indices) {
+            if (newArgs[i] is Location) {
+                newArgs[i] = location
+                replaced = true
             }
         }
+        if (replaced) {
+            HookSupport.logHit(chain.executable, "vendor callback")
+            return chain.proceed(newArgs)
+        }
+        return chain.proceed()
     }
 }
 
-class VendorTraceHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            HookSupport.logHit(callback.member, "vendor trace")
-        }
+object VendorTraceHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        HookSupport.logHit(chain.executable, "vendor trace")
+        return chain.proceed()
     }
 }

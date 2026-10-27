@@ -56,54 +56,54 @@ object DeepServiceHooks {
         for (method in cls.declaredMethods) {
             val name = method.name
             val returnType = method.returnType
-            val hooker: Class<out XposedInterface.Hooker>? = when {
+            val hooker: XposedInterface.Hooker? = when {
                 name == "getLastLocation" && returnType == Location::class.java ->
-                    ServiceLocationReturnHooker::class.java
+                    ServiceLocationReturnHooker
                 name == "getCurrentLocation" ->
-                    ServiceCurrentLocationHooker::class.java
+                    ServiceCurrentLocationHooker
                 name == "requestLocationUpdates" || name == "registerLocationListener" ->
-                    ServiceListenerHooker::class.java
+                    ServiceListenerHooker
                 name == "removeUpdates" ->
-                    ServiceTraceHooker::class.java
+                    ServiceTraceHooker
                 name == "reportLocation" ->
-                    ServiceReportLocationHooker::class.java
+                    ServiceReportLocationHooker
                 // Passive provider re-broadcast: every other provider's fix is
                 // offered to passive listeners through this entry point.
                 name == "updateLocation" && className == "com.android.server.location.provider.PassiveLocationProvider" ->
-                    ServiceReportLocationHooker::class.java
+                    ServiceReportLocationHooker
                 name == "isProviderEnabled" || name == "isProviderEnabledForUser" ->
-                    ServiceProviderEnabledHooker::class.java
+                    ServiceProviderEnabledHooker
                 name == "registerGnssStatusCallback" ->
-                    ServiceTrueHooker::class.java
+                    ServiceTrueHooker
                 name == "requestListenerFlush" ->
-                    ServiceRejectHooker::class.java
+                    ServiceRejectHooker
                 name == "addGnssMeasurementsListener" || name == "addGnssAntennaInfoListener" ->
-                    ServiceRejectHooker::class.java
+                    ServiceRejectHooker
                 name in TEST_PROVIDER_METHODS ->
-                    ServiceRejectHooker::class.java
+                    ServiceRejectHooker
                 name == "setExtraLocationControllerPackageEnabled" ->
-                    ServiceDisableExtraControllerHooker::class.java
+                    ServiceDisableExtraControllerHooker
                 // Server side of the UI command bridge: this is where the
                 // process has the privileges to persist state for all hooks.
                 name == "sendExtraCommand" && className == "com.android.server.location.LocationManagerService" ->
-                    ServiceExtraCommandHooker::class.java
+                    ServiceExtraCommandHooker
                 name == "onTransact" && className == "android.location.ILocationManager\$Stub" ->
-                    ServiceTraceHooker::class.java
+                    ServiceTraceHooker
                 // Push channel for cell-info listeners: every registered app
                 // receives these broadcasts, so the list must be synthetic too.
                 className == "com.android.server.TelephonyRegistry" &&
                     (name == "notifyCellInfo" || name == "notifyCellInfoForSubscriber") ->
-                    TelephonyCellNotifyHooker::class.java
+                    TelephonyCellNotifyHooker
                 // Same push channel for the deprecated bundle-shaped cell
                 // location (PhoneStateListener.LISTEN_CELL_LOCATION).
                 className == "com.android.server.TelephonyRegistry" &&
                     (name == "notifyCellLocation" || name == "notifyCellLocationForSubscriber") ->
-                    TelephonyCellLocationNotifyHooker::class.java
+                    TelephonyCellLocationNotifyHooker
                 // Wrap registered listener objects so their
                 // onCellLocationChanged delivery is rewritten too.
                 className == "com.android.server.TelephonyRegistry" &&
                     (name == "listen" || name == "listenWithEventList") ->
-                    TelephonyListenHooker::class.java
+                    TelephonyListenHooker
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -310,170 +310,152 @@ object DeepServiceHooks {
     }
 }
 
-class ServiceLocationReturnHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            HookSupport.logHit(callback.member, "service return")
-            callback.returnAndSkip(SpoofState.makeLocation(HookSupport.providerFrom(callback.args)))
+object ServiceLocationReturnHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        HookSupport.logHit(chain.executable, "service return")
+        return SpoofState.makeLocation(HookSupport.providerFrom(chain.args))
     }
 }
 
-class ServiceCurrentLocationHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.active() || callback.throwable != null) {
-                return
-            }
-            HookSupport.logHit(callback.member, "service current")
-            DeepServiceHooks.dispatchLocationCallbacks(
-                callback.args,
-                SpoofState.makeLocation(HookSupport.providerFrom(callback.args)),
-            )
+object ServiceCurrentLocationHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (!ModuleRuntime.active()) {
+            return result
         }
+        HookSupport.logHit(chain.executable, "service current")
+        DeepServiceHooks.dispatchLocationCallbacks(
+            HookSupport.argArray(chain),
+            SpoofState.makeLocation(HookSupport.providerFrom(chain.args)),
+        )
+        return result
     }
 }
 
-class ServiceListenerHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.active() || callback.throwable != null) {
-                return
-            }
-            HookSupport.logHit(callback.member, "service listener")
-            DeepServiceHooks.dispatchLocationCallbacks(
-                callback.args,
-                SpoofState.makeLocation(HookSupport.providerFrom(callback.args)),
-            )
+object ServiceListenerHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (!ModuleRuntime.active()) {
+            return result
         }
+        HookSupport.logHit(chain.executable, "service listener")
+        DeepServiceHooks.dispatchLocationCallbacks(
+            HookSupport.argArray(chain),
+            SpoofState.makeLocation(HookSupport.providerFrom(chain.args)),
+        )
+        return result
     }
 }
 
-class ServiceReportLocationHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val args = callback.args ?: return
-            var replaced = false
-            val location = SpoofState.makeLocation(HookSupport.providerFrom(args))
-            for (i in args.indices) {
-                val arg = args[i]
-                if (arg is Location) {
-                    args[i] = location
+object ServiceReportLocationHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
+        }
+        var replaced = false
+        val location = SpoofState.makeLocation(HookSupport.providerFrom(chain.args))
+        val newArgs = chain.args.toTypedArray()
+        for (i in newArgs.indices) {
+            val arg = newArgs[i]
+            if (arg is Location) {
+                newArgs[i] = location
+                replaced = true
+            } else {
+                val result = DeepServiceHooks.replaceLocationResult(arg, location)
+                if (result !== arg) {
+                    newArgs[i] = result
                     replaced = true
-                } else {
-                    val result = DeepServiceHooks.replaceLocationResult(arg, location)
-                    if (result !== arg) {
-                        args[i] = result
-                        replaced = true
-                    }
                 }
             }
-            HookSupport.logHit(
-                callback.member,
-                if (replaced) "service report replaced" else "service report observed",
-            )
         }
+        HookSupport.logHit(
+            chain.executable,
+            if (replaced) "service report replaced" else "service report observed",
+        )
+        return if (replaced) chain.proceed(newArgs) else chain.proceed()
     }
 }
 
-class ServiceRejectHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            HookSupport.logHit(callback.member, "service rejected")
-            HookSupport.skipWithNeutralResult(callback)
+object ServiceRejectHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        HookSupport.logHit(chain.executable, "service rejected")
+        return HookSupport.skipWithNeutralResult(chain)
     }
 }
 
-class ServiceTrueHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            HookSupport.logHit(callback.member, "service forced true")
-            callback.returnAndSkip(true)
+object ServiceTrueHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        HookSupport.logHit(chain.executable, "service forced true")
+        return true
     }
 }
 
-class ServiceProviderEnabledHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val provider = callback.args?.firstOrNull { it is String } as? String ?: return
-            if (provider == LocationManager.GPS_PROVIDER || provider == LocationManager.NETWORK_PROVIDER) {
-                HookSupport.logHit(callback.member, "provider enabled forced")
-                callback.returnAndSkip(true)
-            }
+object ServiceProviderEnabledHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        val provider = chain.args.firstOrNull { it is String } as? String ?: return chain.proceed()
+        if (provider == LocationManager.GPS_PROVIDER || provider == LocationManager.NETWORK_PROVIDER) {
+            HookSupport.logHit(chain.executable, "provider enabled forced")
+            return true
+        }
+        return chain.proceed()
     }
 }
 
-class ServiceDisableExtraControllerHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val args = callback.args ?: return
-            if (args.isNotEmpty() && args[0] is Boolean) {
-                args[0] = false
-                HookSupport.logHit(callback.member, "extra controller disabled")
-            }
+object ServiceDisableExtraControllerHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        val args = chain.args
+        if (args.isNotEmpty() && args[0] is Boolean) {
+            val newArgs = args.toTypedArray()
+            newArgs[0] = false
+            HookSupport.logHit(chain.executable, "extra controller disabled")
+            return chain.proceed(newArgs)
+        }
+        return chain.proceed()
     }
 }
 
-class ServiceTraceHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            HookSupport.logHit(callback.member, "service trace uid=" + Binder.getCallingUid())
-        }
+object ServiceTraceHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        HookSupport.logHit(chain.executable, "service trace uid=" + Binder.getCallingUid())
+        return chain.proceed()
     }
 }
 
 /** Replaces the cell list pushed through TelephonyRegistry broadcasts. */
-class TelephonyCellNotifyHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.cellShield()) {
-                return
-            }
-            val args = callback.args ?: return
-            val cells = dev.ghostloc.offline.synth.CellSynth.makeCellInfoList()
-            var replaced = false
-            for (i in args.indices) {
-                if (args[i] is List<*>) {
-                    args[i] = cells
-                    replaced = true
-                }
-            }
-            if (replaced) {
-                HookSupport.logHit(callback.member, "telephony cell notify replaced")
+object TelephonyCellNotifyHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.cellShield()) {
+            return chain.proceed()
+        }
+        val cells = dev.ghostloc.offline.synth.CellSynth.makeCellInfoList()
+        var replaced = false
+        val newArgs = chain.args.toTypedArray()
+        for (i in newArgs.indices) {
+            if (newArgs[i] is List<*>) {
+                newArgs[i] = cells
+                replaced = true
             }
         }
+        if (replaced) {
+            HookSupport.logHit(chain.executable, "telephony cell notify replaced")
+            return chain.proceed(newArgs)
+        }
+        return chain.proceed()
     }
 }
 
@@ -486,31 +468,30 @@ class TelephonyCellNotifyHooker : XposedInterface.Hooker {
  * replaced with the matching synthetic value so push and pull stay
  * consistent.
  */
-class TelephonyCellLocationNotifyHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.cellShield()) {
-                return
+object TelephonyCellLocationNotifyHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.cellShield()) {
+            return chain.proceed()
+        }
+        var replaced = false
+        val newArgs = chain.args.toTypedArray()
+        for (i in newArgs.indices) {
+            val replacement: Any? = when (newArgs[i]) {
+                is android.os.Bundle -> dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
+                is android.telephony.CellIdentity ->
+                    dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
+                else -> null
             }
-            val args = callback.args ?: return
-            var replaced = false
-            for (i in args.indices) {
-                val replacement: Any? = when (args[i]) {
-                    is android.os.Bundle -> dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
-                    is android.telephony.CellIdentity ->
-                        dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
-                    else -> null
-                }
-                if (replacement != null) {
-                    args[i] = replacement
-                    replaced = true
-                }
-            }
-            if (replaced) {
-                HookSupport.logHit(callback.member, "telephony cell location push replaced")
+            if (replacement != null) {
+                newArgs[i] = replacement
+                replaced = true
             }
         }
+        if (replaced) {
+            HookSupport.logHit(chain.executable, "telephony cell location push replaced")
+            return chain.proceed(newArgs)
+        }
+        return chain.proceed()
     }
 }
 
@@ -520,63 +501,62 @@ class TelephonyCellLocationNotifyHooker : XposedInterface.Hooker {
  * the original's I3 wrapper. Hooking the binder-proxy method in
  * system_server rewrites the payload before it is marshalled to the app.
  */
-class TelephonyListenHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.cellShield()) {
-                return
-            }
-            val method = callback.member as? java.lang.reflect.Method ?: return
-            val params = method.parameterTypes
-            val args = callback.args ?: return
-            for (i in params.indices) {
-                if (params[i].simpleName != "IPhoneStateListener") {
-                    continue
+object TelephonyListenHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            val method = chain.executable as? Method
+            val params = method?.parameterTypes
+            val args = chain.args
+            if (params != null) {
+                for (i in params.indices) {
+                    if (params[i].simpleName != "IPhoneStateListener") {
+                        continue
+                    }
+                    val listener = args.getOrNull(i) ?: continue
+                    wrapListener(listener)
                 }
-                val listener = args.getOrNull(i) ?: continue
-                wrapListener(listener)
             }
         }
+        return chain.proceed()
+    }
 
-        private fun wrapListener(listener: Any) {
-            var hooks = 0
-            for (declared in listener.javaClass.declaredMethods) {
-                if (declared.name != "onCellLocationChanged" || declared.parameterCount != 1) {
-                    continue
-                }
-                if (ModuleRuntime.hookMethodOnce(declared, CellLocationListenerHooker::class.java)) {
-                    hooks++
-                }
+    private fun wrapListener(listener: Any) {
+        var hooks = 0
+        for (declared in listener.javaClass.declaredMethods) {
+            if (declared.name != "onCellLocationChanged" || declared.parameterCount != 1) {
+                continue
             }
-            if (hooks > 0) {
-                ModuleRuntime.log("cell location listener wrapped ${listener.javaClass.name} hooks=$hooks")
+            if (ModuleRuntime.hookMethodOnce(declared, CellLocationListenerHooker)) {
+                hooks++
             }
+        }
+        if (hooks > 0) {
+            ModuleRuntime.log("cell location listener wrapped ${listener.javaClass.name} hooks=$hooks")
         }
     }
 }
 
 /** Delivery-side rewrite installed by [TelephonyListenHooker]. */
-class CellLocationListenerHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.cellShield()) {
-                return
-            }
-            val args = callback.args ?: return
-            val payload = args.firstOrNull() ?: return
-            val replacement: Any? = when (payload) {
-                is android.os.Bundle -> dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
-                is android.telephony.CellIdentity ->
-                    dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
-                else -> null
-            }
-            if (replacement != null) {
-                args[0] = replacement
-                HookSupport.logHit(callback.member, "cell location listener delivery replaced")
-            }
+object CellLocationListenerHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.cellShield()) {
+            return chain.proceed()
         }
+        val args = chain.args
+        val payload = args.firstOrNull() ?: return chain.proceed()
+        val replacement: Any? = when (payload) {
+            is android.os.Bundle -> dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
+            is android.telephony.CellIdentity ->
+                dev.ghostloc.offline.synth.CellSynth.currentLteCellIdentity()
+            else -> null
+        }
+        if (replacement != null) {
+            val newArgs = args.toTypedArray()
+            newArgs[0] = replacement
+            HookSupport.logHit(chain.executable, "cell location listener delivery replaced")
+            return chain.proceed(newArgs)
+        }
+        return chain.proceed()
     }
 }
 
@@ -584,25 +564,23 @@ class CellLocationListenerHooker : XposedInterface.Hooker {
  * Receives the UI's bridge commands inside system_server. Running here means
  * the state file write in Bridge.handle has system privileges, and skipping
  * the original implementation avoids it rejecting the unknown "ghostloc"
- * provider.
+ * provider. Deliberately not gated on [ModuleRuntime.active]: the bridge also
+ * carries the "stop" command that turns spoofing off.
  */
-class ServiceExtraCommandHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            val args = callback.args ?: return
-            if (args.size < 2 || args[0] != dev.ghostloc.offline.core.ModuleRuntime.BRIDGE_PROVIDER) {
-                return
-            }
-            val command = args[1]?.toString() ?: return
-            var bundle: android.os.Bundle? = null
-            for (arg in args) {
-                if (arg is android.os.Bundle) {
-                    bundle = arg
-                }
-            }
-            dev.ghostloc.offline.core.Bridge.handle(command, bundle)
-            callback.returnAndSkip(true)
+object ServiceExtraCommandHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val args = chain.args
+        if (args.size < 2 || args[0] != dev.ghostloc.offline.core.ModuleRuntime.BRIDGE_PROVIDER) {
+            return chain.proceed()
         }
+        val command = args[1]?.toString() ?: return chain.proceed()
+        var bundle: android.os.Bundle? = null
+        for (arg in args) {
+            if (arg is android.os.Bundle) {
+                bundle = arg
+            }
+        }
+        dev.ghostloc.offline.core.Bridge.handle(command, bundle)
+        return true
     }
 }

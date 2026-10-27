@@ -6,24 +6,20 @@ import java.util.Collections
 
 /** Hookers shared across several hook groups. */
 
-class FalseHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.mockShield()) {
-                callback.returnAndSkip(false)
-            }
+object FalseHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.mockShield()) {
+            return false
         }
+        return chain.proceed()
     }
 }
 
-class EmptyListHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield() || ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(Collections.emptyList<Any>())
-            }
+object EmptyListHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield() || ModuleRuntime.cellShield()) {
+            return Collections.emptyList<Any>()
         }
+        return chain.proceed()
     }
 }

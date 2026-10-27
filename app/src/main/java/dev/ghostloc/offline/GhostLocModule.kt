@@ -10,32 +10,32 @@ import dev.ghostloc.offline.hooks.GeocoderHooks
 import dev.ghostloc.offline.hooks.LocationManagerHooks
 import dev.ghostloc.offline.hooks.LocationObjectHooks
 import dev.ghostloc.offline.hooks.PhoneServiceHooks
-import dev.ghostloc.offline.hooks.SettingsHooks
 import dev.ghostloc.offline.hooks.SdkHooks
+import dev.ghostloc.offline.hooks.SettingsHooks
 import dev.ghostloc.offline.hooks.TelephonyHooks
 import dev.ghostloc.offline.hooks.VendorHooks
 import dev.ghostloc.offline.hooks.WifiHooks
 import dev.ghostloc.offline.hooks.WifiServiceHooks
-import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import io.github.libxposed.api.XposedModuleInterface.SystemServerLoadedParam
+import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam
 
 /**
- * libxposed modern-API entry point. The FQCN is referenced by
- * META-INF/xposed/java_init.list and by existing LSPosed registrations, so it
- * must not change.
+ * libxposed modern-API entry point (API 102). The FQCN is referenced by
+ * META-INF/xposed/java_init.list and by existing framework registrations, so
+ * it must not change. The framework instantiates the class through its
+ * no-arg constructor and drives it through [onModuleLoaded].
  */
-class GhostLocModule(base: XposedInterface, param: ModuleLoadedParam) : XposedModule(base, param) {
+class GhostLocModule : XposedModule() {
 
-    init {
-        ModuleRuntime.init(base)
+    override fun onModuleLoaded(param: ModuleLoadedParam) {
+        ModuleRuntime.init(this)
         ModuleRuntime.recordProcess(param.processName)
         ModuleRuntime.log("loaded process=${param.processName}")
     }
 
-    override fun onSystemServerLoaded(param: SystemServerLoadedParam) {
+    override fun onSystemServerStarting(param: SystemServerStartingParam) {
         LocationManagerHooks.install()
         DeepServiceHooks.install(param.classLoader)
         BasicLocationHooks.install(param.classLoader)
@@ -46,6 +46,13 @@ class GhostLocModule(base: XposedInterface, param: ModuleLoadedParam) : XposedMo
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         val packageName = param.packageName
+        if (SELF_PACKAGE == packageName) {
+            // Never hook the module's own process: self-hooking breaks the
+            // UI's Geocoder-based place search and provides no benefit (the
+            // bridge talks to system_server over plain binder).
+            ModuleRuntime.log("self package observed")
+            return
+        }
         LocationManagerHooks.install()
         LocationObjectHooks.install()
         GeocoderHooks.install()
@@ -53,16 +60,13 @@ class GhostLocModule(base: XposedInterface, param: ModuleLoadedParam) : XposedMo
         WifiHooks.install()
         TelephonyHooks.install()
         BluetoothHooks.install()
-        VendorHooks.install(param.classLoader, packageName)
-        SdkHooks.install(param.classLoader)
+        VendorHooks.install(param.defaultClassLoader, packageName)
+        SdkHooks.install(param.defaultClassLoader)
         if (packageName == "com.android.phone") {
-            PhoneServiceHooks.install(param.classLoader)
+            PhoneServiceHooks.install(param.defaultClassLoader)
         }
         if (packageName == "com.android.bluetooth") {
-            BleServiceHooks.install(param.classLoader)
-        }
-        if (SELF_PACKAGE == packageName) {
-            ModuleRuntime.log("self package observed")
+            BleServiceHooks.install(param.defaultClassLoader)
         }
     }
 }

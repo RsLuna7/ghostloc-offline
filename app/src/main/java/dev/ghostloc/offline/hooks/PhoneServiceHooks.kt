@@ -27,19 +27,19 @@ object PhoneServiceHooks {
         var hooks = 0
         for (method in cls.declaredMethods) {
             val name = method.name
-            val hooker: Class<out XposedInterface.Hooker>? = when {
-                name == "getAllCellInfo" -> CellInfoHooker::class.java
-                name == "getCellLocation" -> CellLocationNullHooker::class.java
+            val hooker: XposedInterface.Hooker? = when {
+                name == "getAllCellInfo" -> CellInfoHooker
+                name == "getCellLocation" -> CellLocationNullHooker
                 name == "requestCellInfoUpdate" || name == "requestCellInfoUpdateWithWorkSource" ->
-                    RequestCellInfoUpdateHooker::class.java
+                    RequestCellInfoUpdateHooker
                 name.startsWith("getNetworkType") || name.startsWith("getDataNetworkType") ||
-                    name.startsWith("getVoiceNetworkType") -> NetworkTypeHooker::class.java
-                name.startsWith("getServiceState") -> ServiceStateHooker::class.java
-                name == "getNeighboringCellInfo" -> NeighborCellEmptyHooker::class.java
-                name == "getNetworkOperator" || name == "getSimOperator" -> OperatorCodeHooker::class.java
-                name == "getNetworkOperatorName" || name == "getSimOperatorName" -> OperatorNameHooker::class.java
-                name == "getNetworkCountryIso" || name == "getSimCountryIso" -> CountryIsoHooker::class.java
-                name == "getActivePhoneType" || name == "getActivePhoneTypeForSlot" -> PhoneTypeHooker::class.java
+                    name.startsWith("getVoiceNetworkType") -> NetworkTypeHooker
+                name.startsWith("getServiceState") -> ServiceStateHooker
+                name == "getNeighboringCellInfo" -> NeighborCellEmptyHooker
+                name == "getNetworkOperator" || name == "getSimOperator" -> OperatorCodeHooker
+                name == "getNetworkOperatorName" || name == "getSimOperatorName" -> OperatorNameHooker
+                name == "getNetworkCountryIso" || name == "getSimCountryIso" -> CountryIsoHooker
+                name == "getActivePhoneType" || name == "getActivePhoneTypeForSlot" -> PhoneTypeHooker
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -55,25 +55,21 @@ object PhoneServiceHooks {
  * bundle the TelephonyRegistry push delivers, so polling and listening apps
  * see one consistent cell (the original faked both channels with CDMA data).
  */
-class CellLocationNullHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                HookSupport.logHit(callback.member, "phone cell location masked")
-                callback.returnAndSkip(dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle())
-            }
+object CellLocationNullHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            HookSupport.logHit(chain.executable, "phone cell location masked")
+            return dev.ghostloc.offline.synth.CellSynth.makeCellLocationBundle()
         }
+        return chain.proceed()
     }
 }
 
-class NeighborCellEmptyHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(ArrayList<Any>())
-            }
+object NeighborCellEmptyHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return ArrayList<Any>()
         }
+        return chain.proceed()
     }
 }

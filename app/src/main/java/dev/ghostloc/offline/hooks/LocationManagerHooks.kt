@@ -24,11 +24,11 @@ object LocationManagerHooks {
                 val name = method.name
                 when {
                     name == "getGpsStatus" ->
-                        ModuleRuntime.bridge?.hook(method, GpsStatusHooker::class.java)
+                        ModuleRuntime.hook(method, GpsStatusHooker)
                     name == "registerGnssStatusCallback" || name == "addGpsStatusListener" ->
-                        ModuleRuntime.bridge?.hook(method, GnssStatusRegistrationHooker::class.java)
+                        ModuleRuntime.hook(method, GnssStatusRegistrationHooker)
                     name == "addNmeaListener" ->
-                        ModuleRuntime.bridge?.hook(method, NmeaListenerHooker::class.java)
+                        ModuleRuntime.hook(method, NmeaListenerHooker)
                 }
             }
         } catch (throwable: Throwable) {
@@ -37,44 +37,35 @@ object LocationManagerHooks {
     }
 }
 
-class GpsStatusHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.active()) {
-                callback.returnAndSkip(GnssSynth.makeGpsStatus())
-            }
+object GpsStatusHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.active()) {
+            return GnssSynth.makeGpsStatus()
         }
+        return chain.proceed()
     }
 }
 
-class GnssStatusRegistrationHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val name = (callback.member as? Method)?.name ?: ""
-            val handled = if (name == "addGpsStatusListener") {
-                GnssSynth.dispatchLegacyGpsStatus(callback.args)
-            } else {
-                GnssSynth.dispatchGnssStatusRegistration(callback.args)
-            }
-            if (handled) {
-                callback.returnAndSkip(true)
-            }
+object GnssStatusRegistrationHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        val name = (chain.executable as? Method)?.name ?: ""
+        val handled = if (name == "addGpsStatusListener") {
+            GnssSynth.dispatchLegacyGpsStatus(HookSupport.argArray(chain))
+        } else {
+            GnssSynth.dispatchGnssStatusRegistration(HookSupport.argArray(chain))
+        }
+        return if (handled) true else chain.proceed()
     }
 }
 
-class NmeaListenerHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.active() && NmeaSynth.dispatchNmeaListeners(callback.args)) {
-                callback.returnAndSkip(true)
-            }
+object NmeaListenerHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.active() && NmeaSynth.dispatchNmeaListeners(HookSupport.argArray(chain))) {
+            return true
         }
+        return chain.proceed()
     }
 }

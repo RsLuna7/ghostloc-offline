@@ -20,7 +20,7 @@ object LocationObjectHooks {
     private fun hookBooleanMethod(cls: Class<*>, name: String) {
         try {
             val method = cls.getDeclaredMethod(name)
-            ModuleRuntime.bridge?.hook(method, FalseHooker::class.java)
+            ModuleRuntime.hook(method, FalseHooker)
         } catch (_: NoSuchMethodException) {
         }
     }
@@ -33,9 +33,9 @@ object SettingsHooks {
             for (method in Settings.Secure::class.java.declaredMethods) {
                 when (method.name) {
                     "getString", "getStringForUser" ->
-                        ModuleRuntime.bridge?.hook(method, SecureStringHooker::class.java)
+                        ModuleRuntime.hook(method, SecureStringHooker)
                     "getInt", "getIntForUser" ->
-                        ModuleRuntime.bridge?.hook(method, SecureIntHooker::class.java)
+                        ModuleRuntime.hook(method, SecureIntHooker)
                 }
             }
         } catch (throwable: Throwable) {
@@ -49,42 +49,36 @@ object BluetoothHooks {
     fun install() {
         try {
             val method = BluetoothAdapter::class.java.getDeclaredMethod("getAddress")
-            ModuleRuntime.bridge?.hook(method, BluetoothAddressHooker::class.java)
+            ModuleRuntime.hook(method, BluetoothAddressHooker)
         } catch (throwable: Throwable) {
             ModuleRuntime.log("Bluetooth hook skipped", throwable)
         }
     }
 }
 
-class BluetoothAddressHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip("02:00:00:00:00:00")
-            }
+object BluetoothAddressHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return "02:00:00:00:00:00"
         }
+        return chain.proceed()
     }
 }
 
-class SecureStringHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.mockShield() && HookSupport.hasMockLocationKey(callback.args)) {
-                callback.returnAndSkip("0")
-            }
+object SecureStringHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.mockShield() && HookSupport.hasMockLocationKey(chain.args)) {
+            return "0"
         }
+        return chain.proceed()
     }
 }
 
-class SecureIntHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.mockShield() && HookSupport.hasMockLocationKey(callback.args)) {
-                callback.returnAndSkip(0)
-            }
+object SecureIntHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.mockShield() && HookSupport.hasMockLocationKey(chain.args)) {
+            return 0
         }
+        return chain.proceed()
     }
 }

@@ -60,7 +60,7 @@ object BleServiceHooks {
             if (method.name !in SWALLOW_METHODS) {
                 continue
             }
-            if (hookMethodOnce(method, BleSwallowHooker::class.java)) {
+            if (hookMethodOnce(method, BleSwallowHooker)) {
                 hooks++
             }
         }
@@ -69,15 +69,12 @@ object BleServiceHooks {
     }
 }
 
-class BleSwallowHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            HookSupport.logHit(callback.member, "ble scan swallowed")
-            HookSupport.skipWithNeutralResult(callback)
+object BleSwallowHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        HookSupport.logHit(chain.executable, "ble scan swallowed")
+        return HookSupport.skipWithNeutralResult(chain)
     }
 }

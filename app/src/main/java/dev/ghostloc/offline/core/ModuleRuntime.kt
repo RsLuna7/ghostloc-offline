@@ -87,7 +87,7 @@ object ModuleRuntime {
         Log.i(TAG, message)
         val current = bridge ?: return
         try {
-            current.log("$TAG: $message")
+            current.log(Log.INFO, TAG, message)
         } catch (_: Throwable) {
         }
     }
@@ -97,19 +97,31 @@ object ModuleRuntime {
         Log.i(TAG, message, throwable)
         val current = bridge ?: return
         try {
-            current.log("$TAG: $message", throwable)
+            current.log(Log.INFO, TAG, message, throwable)
         } catch (_: Throwable) {
         }
     }
 
-    fun hookMethodOnce(method: Method, hooker: Class<out XposedInterface.Hooker>): Boolean {
+    fun hook(method: Method, hooker: XposedInterface.Hooker): Boolean {
+        val current = bridge ?: return false
+        return try {
+            method.isAccessible = true
+            current.hook(method).intercept(hooker)
+            true
+        } catch (throwable: Throwable) {
+            log("hook failed ${method.declaringClass.name}#${method.name}", throwable)
+            false
+        }
+    }
+
+    fun hookMethodOnce(method: Method, hooker: XposedInterface.Hooker): Boolean {
         val key = method.declaringClass.name + "#" + methodSignature(method)
         if (!installedHooks.add(key)) {
             return false
         }
         return try {
             method.isAccessible = true
-            bridge?.hook(method, hooker)
+            bridge?.hook(method)?.intercept(hooker)
             log("deep hook installed $key")
             true
         } catch (throwable: Throwable) {

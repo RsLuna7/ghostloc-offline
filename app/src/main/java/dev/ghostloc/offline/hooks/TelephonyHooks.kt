@@ -5,6 +5,7 @@ import android.telephony.TelephonyManager
 import dev.ghostloc.offline.core.ModuleRuntime
 import dev.ghostloc.offline.synth.CellSynth
 import io.github.libxposed.api.XposedInterface
+import java.lang.reflect.Method
 
 object TelephonyHooks {
 
@@ -12,21 +13,21 @@ object TelephonyHooks {
         try {
             for (method in TelephonyManager::class.java.declaredMethods) {
                 val name = method.name
-                val hooker: Class<out XposedInterface.Hooker> = when {
-                    name == "getAllCellInfo" -> CellInfoHooker::class.java
-                    name == "requestCellInfoUpdate" -> RequestCellInfoUpdateHooker::class.java
+                val hooker: XposedInterface.Hooker = when {
+                    name == "getAllCellInfo" -> CellInfoHooker
+                    name == "requestCellInfoUpdate" -> RequestCellInfoUpdateHooker
                     name == "getNetworkType" || name == "getDataNetworkType" || name == "getVoiceNetworkType" ->
-                        NetworkTypeHooker::class.java
-                    name == "isNetworkRoaming" -> FalseHooker::class.java
+                        NetworkTypeHooker
+                    name == "isNetworkRoaming" -> FalseHooker
                     name == "getServiceState" && method.returnType == ServiceState::class.java ->
-                        ServiceStateHooker::class.java
-                    name == "getPhoneType" -> PhoneTypeHooker::class.java
-                    name == "getNetworkOperator" || name == "getSimOperator" -> OperatorCodeHooker::class.java
-                    name == "getNetworkOperatorName" || name == "getSimOperatorName" -> OperatorNameHooker::class.java
-                    name == "getNetworkCountryIso" || name == "getSimCountryIso" -> CountryIsoHooker::class.java
+                        ServiceStateHooker
+                    name == "getPhoneType" -> PhoneTypeHooker
+                    name == "getNetworkOperator" || name == "getSimOperator" -> OperatorCodeHooker
+                    name == "getNetworkOperatorName" || name == "getSimOperatorName" -> OperatorNameHooker
+                    name == "getNetworkCountryIso" || name == "getSimCountryIso" -> CountryIsoHooker
                     else -> continue
                 }
-                ModuleRuntime.bridge?.hook(method, hooker)
+                ModuleRuntime.hook(method, hooker)
             }
         } catch (throwable: Throwable) {
             ModuleRuntime.log("Telephony hook failed", throwable)
@@ -34,103 +35,85 @@ object TelephonyHooks {
     }
 }
 
-class CellInfoHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(CellSynth.makeCellInfoList())
-            }
+object CellInfoHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return CellSynth.makeCellInfoList()
+        }
+        return chain.proceed()
+    }
+}
+
+object RequestCellInfoUpdateHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.cellShield()) {
+            return chain.proceed()
+        }
+        val cells = CellSynth.makeCellInfoList()
+        if (CellSynth.dispatchCellInfoCallback(HookSupport.argArray(chain), cells)) {
+            HookSupport.logHit(chain.executable, "cell callback")
+            return null
+        }
+        return chain.proceed()
+    }
+}
+
+object NetworkTypeHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.cellShield()) {
+            return chain.proceed()
+        }
+        val profile = CellSynth.currentCellProfile()
+        val name = (chain.executable as? Method)?.name ?: ""
+        return when {
+            name == "getVoiceNetworkType" -> TelephonyManager.NETWORK_TYPE_LTE
+            profile.nrEnabled -> TelephonyManager.NETWORK_TYPE_NR
+            else -> TelephonyManager.NETWORK_TYPE_LTE
         }
     }
 }
 
-class RequestCellInfoUpdateHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.cellShield()) {
-                return
-            }
-            val cells = CellSynth.makeCellInfoList()
-            if (CellSynth.dispatchCellInfoCallback(callback.args, cells)) {
-                HookSupport.logHit(callback.member, "cell callback")
-                callback.returnAndSkip(null)
-            }
+object PhoneTypeHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return TelephonyManager.PHONE_TYPE_GSM
         }
+        return chain.proceed()
     }
 }
 
-class NetworkTypeHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.cellShield()) {
-                return
-            }
-            val profile = CellSynth.currentCellProfile()
-            val name = (callback.member as? java.lang.reflect.Method)?.name ?: ""
-            val value = when {
-                name == "getVoiceNetworkType" -> TelephonyManager.NETWORK_TYPE_LTE
-                profile.nrEnabled -> TelephonyManager.NETWORK_TYPE_NR
-                else -> TelephonyManager.NETWORK_TYPE_LTE
-            }
-            callback.returnAndSkip(value)
+object OperatorCodeHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return CellSynth.currentCellProfile().operatorNumeric
         }
+        return chain.proceed()
     }
 }
 
-class PhoneTypeHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(TelephonyManager.PHONE_TYPE_GSM)
-            }
+object OperatorNameHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return CellSynth.currentCellProfile().operatorName
         }
+        return chain.proceed()
     }
 }
 
-class OperatorCodeHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(CellSynth.currentCellProfile().operatorNumeric)
-            }
+object CountryIsoHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return CellSynth.currentCellProfile().countryIso
         }
+        return chain.proceed()
     }
 }
 
-class OperatorNameHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(CellSynth.currentCellProfile().operatorName)
-            }
+object ServiceStateHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.cellShield()) {
+            return CellSynth.makeServiceState()
         }
-    }
-}
-
-class CountryIsoHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(CellSynth.currentCellProfile().countryIso)
-            }
-        }
-    }
-}
-
-class ServiceStateHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.cellShield()) {
-                callback.returnAndSkip(CellSynth.makeServiceState())
-            }
-        }
+        return chain.proceed()
     }
 }
