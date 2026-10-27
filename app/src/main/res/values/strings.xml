@@ -39,8 +39,8 @@
     <!-- Search -->
     <string name="toast_searching">正在搜索…</string>
     <string name="toast_search_empty_input">请输入地点关键字</string>
-    <string name="toast_search_no_result">未找到地点，请直接点地图或手填坐标</string>
-    <string name="toast_search_failed">搜索失败，请直接点地图或手填坐标</string>
+    <string name="toast_search_no_result">未找到地点。系统搜索仅覆盖少数地标；搜店铺/POI 请在「诊断」页配置高德 Key，或直接点地图/手填坐标</string>
+    <string name="toast_search_failed">搜索失败，请直接点地图或手填坐标；搜店铺/POI 可在「诊断」页配置高德 Key</string>
     <string name="toast_search_found">已定位到搜索结果</string>
     <string name="toast_no_geocoder">当前系统未提供地点搜索服务，可在诊断页配置高德搜索 Key</string>
 
