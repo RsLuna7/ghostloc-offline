@@ -1,11 +1,12 @@
 package dev.ghostloc.offline.hooks
 
 import android.net.wifi.WifiInfo
+import android.os.Binder
+import android.os.Process
 import dev.ghostloc.offline.core.ModuleRuntime
 import dev.ghostloc.offline.core.ModuleRuntime.findClass
 import dev.ghostloc.offline.core.ModuleRuntime.hookMethodOnce
 import io.github.libxposed.api.XposedInterface
-import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
 /**
@@ -19,15 +20,18 @@ import java.lang.reflect.Modifier
  * binder implementation behind `WifiManager` — empties scan results for
  * every caller regardless of scope.
  *
- * On Android 13+ the Wi-Fi stack lives in the WifiStack APEX with its own
- * classloader, so the class is resolved through
- * `SystemServerClassLoaderFactory.sLoadedPaths` (key `service-wifi.jar`);
- * `SystemServiceManager#loadClassFromLoader` is hooked as a fallback for
- * ROMs where the map is not populated yet when we run.
+ * System-uid callers (uid 1000: the Settings WLAN picker and the wifi
+ * stack's own background scans) are exempted. Everything that consumes
+ * Wi-Fi for positioning runs as an app uid and stays masked; masking the
+ * owner's own surfaces only locked them out of Wi-Fi management and
+ * degraded stack auto-scans.
  */
 object WifiServiceHooks {
 
     const val IMPL_CLASS = "com.android.server.wifi.WifiServiceImpl"
+
+    /** True when the caller is the system itself (Settings, wifi stack). */
+    fun isSystemCaller(): Boolean = Binder.getCallingUid() == Process.SYSTEM_UID
 
     fun install(loader: ClassLoader?) {
         val impl = resolveImplClass(loader)
@@ -69,7 +73,7 @@ object WifiServiceHooks {
         val manager = findClass(loader, "com.android.server.SystemServiceManager") ?: return
         for (method in manager.declaredMethods) {
             if (method.name == "loadClassFromLoader") {
-                hookMethodOnce(method, ServiceLoadWatcherHooker::class.java)
+                hookMethodOnce(method, ServiceLoadWatcherHooker)
             }
         }
     }
@@ -77,12 +81,12 @@ object WifiServiceHooks {
     fun hookImpl(cls: Class<*>) {
         var hooks = 0
         for (method in cls.declaredMethods) {
-            val hooker: Class<out XposedInterface.Hooker>? = when (method.name) {
-                "getScanResults", "getMatchingScanResults" -> WifiScanResultsHooker::class.java
-                "getConnectionInfo" -> WifiConnectionInfoHooker::class.java
-                "startScan" -> WifiStartScanHooker::class.java
-                "isScanAlwaysAvailable" -> WifiScanAlwaysAvailableHooker::class.java
-                "registerScanResultsCallback" -> WifiScanCallbackHooker::class.java
+            val hooker: XposedInterface.Hooker? = when (method.name) {
+                "getScanResults", "getMatchingScanResults" -> WifiScanResultsHooker
+                "getConnectionInfo" -> WifiConnectionInfoHooker
+                "startScan" -> WifiStartScanHooker
+                "isScanAlwaysAvailable" -> WifiScanAlwaysAvailableHooker
+                "registerScanResultsCallback" -> WifiScanCallbackHooker
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -117,123 +121,117 @@ object WifiServiceHooks {
     }
 }
 
-class WifiScanResultsHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.wifiShield() || callback.throwable != null) {
-                return
-            }
-            val masked = WifiServiceHooks.emptyWrappedResult(callback.result)
-            if (masked !== callback.result) {
-                HookSupport.logHit(callback.member, "wifi scan masked")
-                callback.result = masked
-            }
+object WifiScanResultsHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
+            return result
+        }
+        val masked = WifiServiceHooks.emptyWrappedResult(result)
+        if (masked !== result) {
+            HookSupport.logHit(chain.executable, "wifi scan masked")
+            return masked
+        }
+        return result
+    }
+}
+
+object WifiConnectionInfoHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
+            return chain.proceed()
+        }
+        val masked = makeMaskedWifiInfo()
+        if (masked != null) {
+            HookSupport.logHit(chain.executable, "wifi info masked")
+            return masked
+        }
+        return chain.proceed()
+    }
+
+    private fun makeMaskedWifiInfo(): WifiInfo? {
+        return try {
+            val constructor = WifiInfo::class.java.getDeclaredConstructor()
+            constructor.isAccessible = true
+            val info = constructor.newInstance()
+            ModuleRuntime.tryInvoke(info, "setMacAddress", arrayOf(String::class.java), arrayOf("02:00:00:00:00:00"))
+            ModuleRuntime.tryInvoke(info, "setBSSID", arrayOf(String::class.java), arrayOf("02:00:00:00:00:00"))
+            info
+        } catch (throwable: Throwable) {
+            ModuleRuntime.log("masked WifiInfo construction failed", throwable)
+            null
         }
     }
 }
 
-class WifiConnectionInfoHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.wifiShield()) {
-                return
-            }
-            val masked = makeMaskedWifiInfo()
-            if (masked != null) {
-                HookSupport.logHit(callback.member, "wifi info masked")
-                callback.returnAndSkip(masked)
-            }
+object WifiStartScanHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller()) {
+            return chain.proceed()
         }
-
-        private fun makeMaskedWifiInfo(): WifiInfo? {
-            return try {
-                val constructor = WifiInfo::class.java.getDeclaredConstructor()
-                constructor.isAccessible = true
-                val info = constructor.newInstance()
-                ModuleRuntime.tryInvoke(info, "setMacAddress", arrayOf(String::class.java), arrayOf("02:00:00:00:00:00"))
-                ModuleRuntime.tryInvoke(info, "setBSSID", arrayOf(String::class.java), arrayOf("02:00:00:00:00:00"))
-                info
-            } catch (throwable: Throwable) {
-                ModuleRuntime.log("masked WifiInfo construction failed", throwable)
-                null
-            }
+        if (ModuleRuntime.wifiShield()) {
+            HookSupport.logHit(chain.executable, "wifi startScan masked")
+            return false
         }
+        return chain.proceed()
     }
 }
 
-class WifiStartScanHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                HookSupport.logHit(callback.member, "wifi startScan masked")
-                callback.returnAndSkip(false)
-            }
+object WifiScanAlwaysAvailableHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller()) {
+            return chain.proceed()
         }
-    }
-}
-
-class WifiScanAlwaysAvailableHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                HookSupport.logHit(callback.member, "wifi scan-always masked")
-                callback.returnAndSkip(false)
-            }
+        if (ModuleRuntime.wifiShield()) {
+            HookSupport.logHit(chain.executable, "wifi scan-always masked")
+            return false
         }
+        return chain.proceed()
     }
 }
 
 /** Suppresses `onScanResultsAvailable` delivery for every registered
  *  callback object (the callback binder arrives as a method argument). */
-class WifiScanCallbackHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.wifiShield()) {
-                return
+object WifiScanCallbackHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
+            return chain.proceed()
+        }
+        for (arg in chain.args) {
+            if (arg == null) {
+                continue
             }
-            for (arg in callback.args ?: return) {
-                if (arg == null) {
-                    continue
-                }
-                for (method in arg.javaClass.declaredMethods) {
-                    if (method.name == "onScanResultsAvailable" && !Modifier.isAbstract(method.modifiers)) {
-                        hookMethodOnce(method, WifiScanCallbackSuppressHooker::class.java)
-                    }
+            for (method in arg.javaClass.declaredMethods) {
+                if (method.name == "onScanResultsAvailable" && !Modifier.isAbstract(method.modifiers)) {
+                    hookMethodOnce(method, WifiScanCallbackSuppressHooker)
                 }
             }
         }
+        return chain.proceed()
     }
 }
 
-class WifiScanCallbackSuppressHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(null)
-            }
+object WifiScanCallbackSuppressHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
+            return chain.proceed()
         }
+        return null
     }
 }
 
-class ServiceLoadWatcherHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val args = callback.args ?: return
-            val name = args.getOrNull(0) as? String ?: return
-            if (name == "com.android.server.wifi.WifiService") {
-                val loader = args.getOrNull(1) as? ClassLoader ?: return
-                val impl = findClass(loader, WifiServiceHooks.IMPL_CLASS)
-                if (impl != null) {
-                    WifiServiceHooks.hookImpl(impl)
-                }
+object ServiceLoadWatcherHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val args = chain.args
+        val name = args.getOrNull(0) as? String ?: return result
+        if (name == "com.android.server.wifi.WifiService") {
+            val loader = args.getOrNull(1) as? ClassLoader ?: return result
+            val impl = findClass(loader, WifiServiceHooks.IMPL_CLASS)
+            if (impl != null) {
+                WifiServiceHooks.hookImpl(impl)
             }
         }
+        return result
     }
 }

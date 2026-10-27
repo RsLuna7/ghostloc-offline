@@ -42,13 +42,31 @@ object PlaceSearch {
                         error = "amap_no_result"
                     }
                 } else if (Geocoder.isPresent()) {
-                    val geocoder = Geocoder(appContext, java.util.Locale.SIMPLIFIED_CHINESE)
-                    val addresses = geocoder.getFromLocationName(query, 1)
-                    if (addresses != null && addresses.isNotEmpty()) {
-                        val address = addresses[0]
-                        result = doubleArrayOf(address.latitude, address.longitude)
-                    } else {
-                        error = "geocoder_no_result"
+                    // The geocoder backend is a network service; transient
+                    // drops (weak Wi-Fi, handover) look exactly like "no
+                    // result". Retry before giving up so a flaky link still
+                    // jumps instead of dead-ending.
+                    var lastError: String? = null
+                    for (attempt in 0 until 3) {
+                        if (attempt > 0) {
+                            Thread.sleep(1200L * attempt)
+                        }
+                        val geocoder = Geocoder(appContext, java.util.Locale.SIMPLIFIED_CHINESE)
+                        val addresses = try {
+                            geocoder.getFromLocationName(query, 1)
+                        } catch (throwable: Throwable) {
+                            Log.i(TAG, "geocoder attempt $attempt failed: " + throwable.javaClass.simpleName)
+                            null
+                        }
+                        if (addresses != null && addresses.isNotEmpty()) {
+                            val address = addresses[0]
+                            result = doubleArrayOf(address.latitude, address.longitude)
+                            break
+                        }
+                        lastError = "geocoder_no_result"
+                    }
+                    if (result == null) {
+                        error = lastError
                     }
                 } else {
                     error = "no_geocoder"

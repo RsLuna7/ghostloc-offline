@@ -33,9 +33,9 @@ object BasicLocationHooks {
             if (Modifier.isAbstract(method.modifiers)) {
                 continue
             }
-            val hooker: Class<out XposedInterface.Hooker>? = when (method.name) {
-                "writeToParcel" -> LocationParcelHooker::class.java
-                "set" -> LocationSetHooker::class.java
+            val hooker: XposedInterface.Hooker? = when (method.name) {
+                "writeToParcel" -> LocationParcelHooker
+                "set" -> LocationSetHooker
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -56,12 +56,12 @@ object BasicLocationHooks {
             if (Modifier.isAbstract(method.modifiers) || method.isSynthetic) {
                 continue
             }
-            val hooker: Class<out XposedInterface.Hooker>? = when {
-                method.name == "asList" -> LocationResultAsListHooker::class.java
-                method.name == "writeToParcel" -> LocationResultParcelHooker::class.java
+            val hooker: XposedInterface.Hooker? = when {
+                method.name == "asList" -> LocationResultAsListHooker
+                method.name == "writeToParcel" -> LocationResultParcelHooker
                 method.returnType == Location::class.java ||
                     method.parameterTypes.any { it == Location::class.java } ->
-                    LocationResultLocationHooker::class.java
+                    LocationResultLocationHooker
                 else -> null
             }
             if (hooker != null && hookMethodOnce(method, hooker)) {
@@ -201,96 +201,79 @@ object BasicLocationHooks {
     }
 }
 
-class LocationParcelHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val location = callback.thisObject as? Location ?: return
-            BasicLocationHooks.overwrite(location)
-            HookSupport.logHit(callback.member, "location parcel rewritten")
+object LocationParcelHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        val location = chain.thisObject as? Location ?: return chain.proceed()
+        BasicLocationHooks.overwrite(location)
+        HookSupport.logHit(chain.executable, "location parcel rewritten")
+        return chain.proceed()
     }
 }
 
-class LocationSetHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val args = callback.args ?: return
-            if (args.isEmpty()) {
-                return
-            }
-            val source = args[0] as? Location ?: return
-            args[0] = BasicLocationHooks.remap(source)
-            HookSupport.logHit(callback.member, "location set remapped")
+object LocationSetHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        val args = chain.args
+        if (args.isEmpty()) {
+            return chain.proceed()
+        }
+        val source = args[0] as? Location ?: return chain.proceed()
+        val newArgs = args.toTypedArray()
+        newArgs[0] = BasicLocationHooks.remap(source)
+        HookSupport.logHit(chain.executable, "location set remapped")
+        return chain.proceed(newArgs)
     }
 }
 
-class LocationResultAsListHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.active() || callback.throwable != null) {
-                return
-            }
-            val remapped = BasicLocationHooks.remapList(callback.result)
-            if (remapped !== callback.result) {
-                callback.result = remapped
-                HookSupport.logHit(callback.member, "location result asList remapped")
-            }
+object LocationResultAsListHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (!ModuleRuntime.active()) {
+            return result
         }
+        val remapped = BasicLocationHooks.remapList(result)
+        if (remapped !== result) {
+            HookSupport.logHit(chain.executable, "location result asList remapped")
+        }
+        return remapped
     }
 }
 
-class LocationResultParcelHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            BasicLocationHooks.rewriteLocationResult(callback.thisObject)
-            HookSupport.logHit(callback.member, "location result parcel rewritten")
+object LocationResultParcelHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.active()) {
+            BasicLocationHooks.rewriteLocationResult(chain.thisObject)
+            HookSupport.logHit(chain.executable, "location result parcel rewritten")
         }
+        return chain.proceed()
     }
 }
 
-class LocationResultLocationHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val args = callback.args ?: return
-            var replaced = false
-            for (i in args.indices) {
-                val arg = args[i]
-                if (arg is Location) {
-                    args[i] = BasicLocationHooks.remap(arg)
-                    replaced = true
-                }
-            }
-            if (replaced) {
-                HookSupport.logHit(callback.member, "location result arg remapped")
+object LocationResultLocationHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
+        }
+        var replaced = false
+        val newArgs = chain.args.toTypedArray()
+        for (i in newArgs.indices) {
+            val arg = newArgs[i]
+            if (arg is Location) {
+                newArgs[i] = BasicLocationHooks.remap(arg)
+                replaced = true
             }
         }
-
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.active() || callback.throwable != null) {
-                return
-            }
-            val result = callback.result as? Location ?: return
-            callback.result = BasicLocationHooks.remap(result)
-            HookSupport.logHit(callback.member, "location result return remapped")
+        if (replaced) {
+            HookSupport.logHit(chain.executable, "location result arg remapped")
         }
+        val result = if (replaced) chain.proceed(newArgs) else chain.proceed()
+        val location = result as? Location ?: return result
+        HookSupport.logHit(chain.executable, "location result return remapped")
+        return BasicLocationHooks.remap(location)
     }
 }

@@ -42,10 +42,10 @@ object SdkHooks {
         val cls = findClass(loader, TENCENT_NLP) ?: return 0
         var hooks = 0
         for (method in cls.declaredMethods) {
-            val hooker: Class<out XposedInterface.Hooker>? = when {
-                method.returnType == Location::class.java -> SdkLocationReturnHooker::class.java
+            val hooker: XposedInterface.Hooker? = when {
+                method.returnType == Location::class.java -> SdkLocationReturnHooker
                 method.parameterTypes.any { it == Location::class.java } ->
-                    SdkLocationArgHooker::class.java
+                    SdkLocationArgHooker
                 else -> null
             }
             if (hooker != null && ModuleRuntime.hookMethodOnce(method, hooker)) {
@@ -67,7 +67,7 @@ object SdkHooks {
         var hooks = 0
         for (method in cls.declaredMethods) {
             if (method.name == "onSendExtraCommand" || method.name == "updateOffLocEnable") {
-                if (ModuleRuntime.hookMethodOnce(method, SdkAmapRejectHooker::class.java)) {
+                if (ModuleRuntime.hookMethodOnce(method, SdkAmapRejectHooker)) {
                     hooks++
                 }
             }
@@ -85,7 +85,7 @@ object SdkHooks {
         var hooks = 0
         for (method in cls.declaredMethods) {
             if (method.name == "requestNLPNormal") {
-                if (ModuleRuntime.hookMethodOnce(method, SdkBaiduLocationHooker::class.java)) {
+                if (ModuleRuntime.hookMethodOnce(method, SdkBaiduLocationHooker)) {
                     hooks++
                 }
             }
@@ -96,57 +96,51 @@ object SdkHooks {
 }
 
 /** Rewrites a Location returned by the SDK's own resolution. */
-class SdkLocationReturnHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.active() || callback.throwable != null) {
-                return
-            }
-            val result = callback.result
-            if (result is Location) {
-                HookSupport.logHit(callback.member, "sdk location return")
-                callback.result = BasicLocationHooks.remap(result)
-            }
+object SdkLocationReturnHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (!ModuleRuntime.active()) {
+            return result
         }
+        if (result is Location) {
+            HookSupport.logHit(chain.executable, "sdk location return")
+            return BasicLocationHooks.remap(result)
+        }
+        return result
     }
 }
 
 /** Rewrites Location arguments the SDK passes into its own callbacks. */
-class SdkLocationArgHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            val args = callback.args ?: return
-            var replaced = false
-            for (i in args.indices) {
-                val arg = args[i]
-                if (arg is Location) {
-                    args[i] = BasicLocationHooks.remap(arg)
-                    replaced = true
-                }
-            }
-            if (replaced) {
-                HookSupport.logHit(callback.member, "sdk location arg")
+object SdkLocationArgHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
+        }
+        var replaced = false
+        val newArgs = chain.args.toTypedArray()
+        for (i in newArgs.indices) {
+            val arg = newArgs[i]
+            if (arg is Location) {
+                newArgs[i] = BasicLocationHooks.remap(arg)
+                replaced = true
             }
         }
+        if (replaced) {
+            HookSupport.logHit(chain.executable, "sdk location arg")
+            return chain.proceed(newArgs)
+        }
+        return chain.proceed()
     }
 }
 
 /** Neutral-skips the AMap NLP command/toggle entry points while spoofing. */
-class SdkAmapRejectHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (!ModuleRuntime.active()) {
-                return
-            }
-            HookSupport.logHit(callback.member, "sdk amap rejected")
-            HookSupport.skipWithNeutralResult(callback)
+object SdkAmapRejectHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (!ModuleRuntime.active()) {
+            return chain.proceed()
         }
+        HookSupport.logHit(chain.executable, "sdk amap rejected")
+        return HookSupport.skipWithNeutralResult(chain)
     }
 }
 
@@ -155,27 +149,25 @@ class SdkAmapRejectHooker : XposedInterface.Hooker {
  * cleared building/address strings (they would still describe the real
  * surroundings).
  */
-class SdkBaiduLocationHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (!ModuleRuntime.active() || callback.throwable != null) {
-                return
-            }
-            val result = callback.result ?: return
-            val location = SpoofState.makeLocation(LocationManager.NETWORK_PROVIDER)
-            val doubleType = Double::class.javaPrimitiveType!!
-            var changed = tryInvoke(
-                result, "setLatitude", arrayOf(doubleType), arrayOf(location.latitude),
-            )
-            changed = tryInvoke(
-                result, "setLongitude", arrayOf(doubleType), arrayOf(location.longitude),
-            ) || changed
-            tryInvoke(result, "setBuildingID", arrayOf(String::class.java), arrayOf(""))
-            tryInvoke(result, "setAddrStr", arrayOf(String::class.java), arrayOf(""))
-            if (changed) {
-                HookSupport.logHit(callback.member, "sdk baidu location")
-            }
+object SdkBaiduLocationHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (!ModuleRuntime.active() || result == null) {
+            return result
         }
+        val location = SpoofState.makeLocation(LocationManager.NETWORK_PROVIDER)
+        val doubleType = Double::class.javaPrimitiveType!!
+        var changed = tryInvoke(
+            result, "setLatitude", arrayOf(doubleType), arrayOf(location.latitude),
+        )
+        changed = tryInvoke(
+            result, "setLongitude", arrayOf(doubleType), arrayOf(location.longitude),
+        ) || changed
+        tryInvoke(result, "setBuildingID", arrayOf(String::class.java), arrayOf(""))
+        tryInvoke(result, "setAddrStr", arrayOf(String::class.java), arrayOf(""))
+        if (changed) {
+            HookSupport.logHit(chain.executable, "sdk baidu location")
+        }
+        return result
     }
 }

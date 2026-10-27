@@ -15,7 +15,7 @@ object HookSupport {
         LocationManager.FUSED_PROVIDER,
     )
 
-    fun providerFrom(args: Array<Any?>?): String {
+    fun providerFrom(args: List<Any?>?): String {
         if (args != null) {
             for (arg in args) {
                 if (arg is String && arg in KNOWN_PROVIDERS) {
@@ -42,21 +42,21 @@ object HookSupport {
         }
     }
 
-    fun isKnownProviderArg(args: Array<Any?>?): Boolean {
+    fun isKnownProviderArg(args: List<Any?>?): Boolean {
         if (args == null) {
             return false
         }
         return args.any { it is String && it in KNOWN_PROVIDERS }
     }
 
-    fun isCancellationSignalSet(args: Array<Any?>?): Boolean {
+    fun isCancellationSignalSet(args: List<Any?>?): Boolean {
         if (args == null) {
             return false
         }
         return args.any { it is CancellationSignal && it.isCanceled }
     }
 
-    fun hasMockLocationKey(args: Array<Any?>?): Boolean {
+    fun hasMockLocationKey(args: List<Any?>?): Boolean {
         if (args == null) {
             return false
         }
@@ -68,22 +68,21 @@ object HookSupport {
     }
 
     /**
-     * Skip the original method with a return value that matches the
-     * signature: `false` for boolean, `null` for void/reference. Avoids
-     * unbox NPEs that a blanket `null` would cause on boolean hooks.
+     * Neutral return value matching the hooked signature: `false` for
+     * boolean, `null` for void/reference. Avoids unbox NPEs that a blanket
+     * `null` would cause on boolean hooks. Returning it from [intercept]
+     * skips the original method, like the old `returnAndSkip`.
      */
-    fun skipWithNeutralResult(callback: XposedInterface.BeforeHookCallback) {
-        val method = callback.member as? java.lang.reflect.Method
-        val result: Any? = when (method?.returnType) {
+    fun skipWithNeutralResult(chain: XposedInterface.Chain): Any? {
+        val method = chain.executable as? java.lang.reflect.Method
+        return when (method?.returnType) {
             java.lang.Boolean.TYPE, java.lang.Boolean::class.java -> false
             java.lang.Integer.TYPE, java.lang.Integer::class.java -> 0
             java.lang.Long.TYPE, java.lang.Long::class.java -> 0L
             else -> null
         }
-        callback.returnAndSkip(result)
     }
 
-    fun args(callback: XposedInterface.BeforeHookCallback): Array<Any?>? = callback.args
-
-    fun args(callback: XposedInterface.AfterHookCallback): Array<Any?>? = callback.args
+    /** Snapshot of the immutable chain arguments as a mutable array. */
+    fun argArray(chain: XposedInterface.Chain): Array<Any?> = chain.args.toTypedArray()
 }

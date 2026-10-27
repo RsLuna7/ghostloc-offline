@@ -1,12 +1,9 @@
 package io.github.libxposed.api;
 
+/**
+ * Super class which all Xposed module entry classes should extend.<br/>
+ * Entry classes will be instantiated once for each loaded module generation in a process.
+ */
 @SuppressWarnings("unused")
-public abstract class XposedModule implements XposedModuleInterface {
-    protected final XposedInterface base;
-    protected final ModuleLoadedParam moduleLoadedParam;
-
-    protected XposedModule(XposedInterface base, ModuleLoadedParam param) {
-        this.base = base;
-        this.moduleLoadedParam = param;
-    }
+public abstract class XposedModule extends XposedInterfaceWrapper implements XposedModuleInterface {
 }

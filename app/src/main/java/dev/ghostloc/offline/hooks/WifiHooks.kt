@@ -12,24 +12,24 @@ object WifiHooks {
         try {
             for (method in WifiManager::class.java.declaredMethods) {
                 when (method.name) {
-                    "getScanResults" -> ModuleRuntime.bridge?.hook(method, EmptyListHooker::class.java)
-                    "isScanAlwaysAvailable" -> ModuleRuntime.bridge?.hook(method, FalseHooker::class.java)
+                    "getScanResults" -> ModuleRuntime.hook(method, EmptyListHooker)
+                    "isScanAlwaysAvailable" -> ModuleRuntime.hook(method, FalseHooker)
                 }
             }
             for (method in WifiInfo::class.java.declaredMethods) {
-                val hooker: Class<out XposedInterface.Hooker> = when (method.name) {
-                    "getMacAddress", "getBSSID" -> WifiAddressHooker::class.java
-                    "getSSID" -> WifiSsidHooker::class.java
-                    "getRssi" -> WifiRssiHooker::class.java
-                    "getLinkSpeed" -> WifiLinkSpeedHooker::class.java
-                    "getFrequency" -> WifiFrequencyHooker::class.java
-                    "getNetworkId" -> WifiNetworkIdHooker::class.java
-                    "getIpAddress" -> WifiIpHooker::class.java
-                    "getSupplicantState" -> WifiSupplicantHooker::class.java
-                    "getHiddenSSID" -> FalseHooker::class.java
+                val hooker: XposedInterface.Hooker = when (method.name) {
+                    "getMacAddress", "getBSSID" -> WifiAddressHooker
+                    "getSSID" -> WifiSsidHooker
+                    "getRssi" -> WifiRssiHooker
+                    "getLinkSpeed" -> WifiLinkSpeedHooker
+                    "getFrequency" -> WifiFrequencyHooker
+                    "getNetworkId" -> WifiNetworkIdHooker
+                    "getIpAddress" -> WifiIpHooker
+                    "getSupplicantState" -> WifiSupplicantHooker
+                    "getHiddenSSID" -> FalseHooker
                     else -> continue
                 }
-                ModuleRuntime.bridge?.hook(method, hooker)
+                ModuleRuntime.hook(method, hooker)
             }
         } catch (throwable: Throwable) {
             ModuleRuntime.log("Wi-Fi hook failed", throwable)
@@ -37,90 +37,74 @@ object WifiHooks {
     }
 }
 
-class WifiAddressHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip("02:00:00:00:00:00")
-            }
+object WifiAddressHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return "02:00:00:00:00:00"
         }
+        return chain.proceed()
     }
 }
 
-class WifiSsidHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip("\"GhostLoc\"")
-            }
+object WifiSsidHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return "\"GhostLoc\""
         }
+        return chain.proceed()
     }
 }
 
-class WifiRssiHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(-55)
-            }
+object WifiRssiHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return -55
         }
+        return chain.proceed()
     }
 }
 
-class WifiLinkSpeedHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(72)
-            }
+object WifiLinkSpeedHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return 72
         }
+        return chain.proceed()
     }
 }
 
-class WifiFrequencyHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(2412)
-            }
+object WifiFrequencyHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return 2412
         }
+        return chain.proceed()
     }
 }
 
-class WifiNetworkIdHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(0)
-            }
+object WifiNetworkIdHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return 0
         }
+        return chain.proceed()
     }
 }
 
-class WifiIpHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(0)
-            }
+object WifiIpHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return 0
         }
+        return chain.proceed()
     }
 }
 
-class WifiSupplicantHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            if (ModuleRuntime.wifiShield()) {
-                callback.returnAndSkip(SupplicantState.COMPLETED)
-            }
+object WifiSupplicantHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ModuleRuntime.wifiShield()) {
+            return SupplicantState.COMPLETED
         }
+        return chain.proceed()
     }
 }
