@@ -1,5 +1,7 @@
 package dev.ghostloc.offline.hooks
 
+import android.os.Binder
+import android.os.Process
 import dev.ghostloc.offline.core.ModuleRuntime
 import dev.ghostloc.offline.core.ModuleRuntime.findClass
 import dev.ghostloc.offline.core.ModuleRuntime.hookMethodOnce
@@ -71,7 +73,9 @@ object BleServiceHooks {
 
 object BleSwallowHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
-        if (!ModuleRuntime.active()) {
+        // System-uid callers are the owner's own surfaces (Settings device
+        // pairing); masking them only broke device management.
+        if (!ModuleRuntime.active() || Binder.getCallingUid() == Process.SYSTEM_UID) {
             return chain.proceed()
         }
         HookSupport.logHit(chain.executable, "ble scan swallowed")

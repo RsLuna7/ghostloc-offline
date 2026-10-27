@@ -1,6 +1,8 @@
 package dev.ghostloc.offline.hooks
 
 import android.net.wifi.WifiInfo
+import android.os.Binder
+import android.os.Process
 import dev.ghostloc.offline.core.ModuleRuntime
 import dev.ghostloc.offline.core.ModuleRuntime.findClass
 import dev.ghostloc.offline.core.ModuleRuntime.hookMethodOnce
@@ -18,15 +20,18 @@ import java.lang.reflect.Modifier
  * binder implementation behind `WifiManager` — empties scan results for
  * every caller regardless of scope.
  *
- * On Android 13+ the Wi-Fi stack lives in the WifiStack APEX with its own
- * classloader, so the class is resolved through
- * `SystemServerClassLoaderFactory.sLoadedPaths` (key `service-wifi.jar`);
- * `SystemServiceManager#loadClassFromLoader` is hooked as a fallback for
- * ROMs where the map is not populated yet when we run.
+ * System-uid callers (uid 1000: the Settings WLAN picker and the wifi
+ * stack's own background scans) are exempted. Everything that consumes
+ * Wi-Fi for positioning runs as an app uid and stays masked; masking the
+ * owner's own surfaces only locked them out of Wi-Fi management and
+ * degraded stack auto-scans.
  */
 object WifiServiceHooks {
 
     const val IMPL_CLASS = "com.android.server.wifi.WifiServiceImpl"
+
+    /** True when the caller is the system itself (Settings, wifi stack). */
+    fun isSystemCaller(): Boolean = Binder.getCallingUid() == Process.SYSTEM_UID
 
     fun install(loader: ClassLoader?) {
         val impl = resolveImplClass(loader)
@@ -119,7 +124,7 @@ object WifiServiceHooks {
 object WifiScanResultsHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()
-        if (!ModuleRuntime.wifiShield()) {
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
             return result
         }
         val masked = WifiServiceHooks.emptyWrappedResult(result)
@@ -133,7 +138,7 @@ object WifiScanResultsHooker : XposedInterface.Hooker {
 
 object WifiConnectionInfoHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
-        if (!ModuleRuntime.wifiShield()) {
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
             return chain.proceed()
         }
         val masked = makeMaskedWifiInfo()
@@ -161,6 +166,9 @@ object WifiConnectionInfoHooker : XposedInterface.Hooker {
 
 object WifiStartScanHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller()) {
+            return chain.proceed()
+        }
         if (ModuleRuntime.wifiShield()) {
             HookSupport.logHit(chain.executable, "wifi startScan masked")
             return false
@@ -171,6 +179,9 @@ object WifiStartScanHooker : XposedInterface.Hooker {
 
 object WifiScanAlwaysAvailableHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (WifiServiceHooks.isSystemCaller()) {
+            return chain.proceed()
+        }
         if (ModuleRuntime.wifiShield()) {
             HookSupport.logHit(chain.executable, "wifi scan-always masked")
             return false
@@ -183,15 +194,16 @@ object WifiScanAlwaysAvailableHooker : XposedInterface.Hooker {
  *  callback object (the callback binder arrives as a method argument). */
 object WifiScanCallbackHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
-        if (ModuleRuntime.wifiShield()) {
-            for (arg in chain.args) {
-                if (arg == null) {
-                    continue
-                }
-                for (method in arg.javaClass.declaredMethods) {
-                    if (method.name == "onScanResultsAvailable" && !Modifier.isAbstract(method.modifiers)) {
-                        hookMethodOnce(method, WifiScanCallbackSuppressHooker)
-                    }
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
+            return chain.proceed()
+        }
+        for (arg in chain.args) {
+            if (arg == null) {
+                continue
+            }
+            for (method in arg.javaClass.declaredMethods) {
+                if (method.name == "onScanResultsAvailable" && !Modifier.isAbstract(method.modifiers)) {
+                    hookMethodOnce(method, WifiScanCallbackSuppressHooker)
                 }
             }
         }
@@ -201,10 +213,10 @@ object WifiScanCallbackHooker : XposedInterface.Hooker {
 
 object WifiScanCallbackSuppressHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
-        if (ModuleRuntime.wifiShield()) {
-            return null
+        if (WifiServiceHooks.isSystemCaller() || !ModuleRuntime.wifiShield()) {
+            return chain.proceed()
         }
-        return chain.proceed()
+        return null
     }
 }
 
