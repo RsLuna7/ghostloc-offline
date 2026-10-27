@@ -114,10 +114,19 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
     override fun onServiceStateChanged(newService: XposedService?) {
         service = newService
         runOnUiThread {
-            binding.serviceStatus.text = if (newService == null) {
+            val base = if (newService == null) {
                 getString(R.string.service_not_connected)
             } else {
                 "模块服务：" + newService.frameworkName + " API " + newService.apiVersion
+            }
+            // Probe the system hook layer through the bridge: the sendExtraCommand
+            // hook in system_server is the one component whose absence is silent
+            // everywhere else (module shows enabled, spoof dead). A delivered
+            // is_start writeback proves the whole chain is live.
+            binding.serviceStatus.text = base + when {
+                newService == null -> ""
+                probeSystemHook() -> " · 系统钩子正常"
+                else -> " · 系统钩子未连接，重启手机自动修复"
             }
             loadSettings()
             if (pendingAutoApply && newService != null) {
@@ -441,6 +450,29 @@ class MainActivity : AppCompatActivity(), ModuleApplication.ServiceStateListener
             Log.i("GhostLocApp", "bridge sync sent active=$active")
         } catch (throwable: Throwable) {
             Log.i("GhostLocApp", "bridge sync failed " + throwable.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * True when the system_server side of the module answered a bridge
+     * command. An undelivered command (exception — the platform rejects the
+     * unknown "ghostloc" provider when the hook is absent) means the spoof is
+     * NOT live regardless of what this UI's local state says.
+     */
+    private fun probeSystemHook(): Boolean {
+        return try {
+            val manager = getSystemService(Context.LOCATION_SERVICE)
+            val method = LocationManager::class.java.getMethod(
+                "sendExtraCommand",
+                String::class.java,
+                String::class.java,
+                Bundle::class.java,
+            )
+            val bundle = Bundle()
+            method.invoke(manager, "ghostloc", "is_start", bundle)
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 

@@ -22,6 +22,13 @@ object LiveState {
     private const val TTL_MS = 1500L
     private const val MAX_FAILURES = 3
 
+    /**
+     * A dead bridge (module updated, system_server about to be bounced by the
+     * watchdog) must not disable the channel forever: re-arm after this window
+     * so a recovered hook layer is picked up without restarting the process.
+     */
+    private const val RETRY_BACKOFF_MS = 60_000L
+
     @Volatile
     private var cached: Map<String, String>? = null
 
@@ -31,17 +38,20 @@ object LiveState {
     private var failures = 0
 
     @Volatile
-    private var disabled = false
+    private var disabledUntil = 0L
 
-    /** Current live overlay; empty when the channel is unavailable. */
+    /** Current live overlay; empty while the channel is backing off. */
     fun props(): Map<String, String> {
-        if (disabled) {
+        if (SystemClock.elapsedRealtime() < disabledUntil) {
             return emptyMap()
         }
         if (SystemClock.elapsedRealtime() - cachedAt < TTL_MS) {
             return cached ?: emptyMap()
         }
         return synchronized(this) {
+            if (SystemClock.elapsedRealtime() < disabledUntil) {
+                return emptyMap()
+            }
             if (SystemClock.elapsedRealtime() - cachedAt < TTL_MS) {
                 return cached ?: emptyMap()
             }
@@ -49,8 +59,9 @@ object LiveState {
                 null -> {
                     failures++
                     if (failures >= MAX_FAILURES) {
-                        disabled = true
-                        ModuleRuntime.log("live state channel disabled after $failures failures")
+                        disabledUntil = SystemClock.elapsedRealtime() + RETRY_BACKOFF_MS
+                        failures = 0
+                        ModuleRuntime.log("live state channel backing off after $MAX_FAILURES failures")
                     }
                 }
                 else -> {
